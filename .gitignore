@@ -17,3 +17,4 @@ frontend/dist/
 .vscode/
 *.swp
 *.tsbuildinfo
+pocket/dist/

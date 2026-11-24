@@ -1,0 +1,64 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TabForge Pocket</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="theme-color" content="#0d1017">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>/*__STYLE__*/</style>
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand">
+      <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="var(--panel-2)"/>
+        <path d="M6 9h20M6 14h20M6 19h20M6 24h20" stroke="var(--string)" stroke-width="1.3"/>
+        <circle cx="12" cy="14" r="3.6" fill="var(--accent)"/>
+        <circle cx="21" cy="19" r="3.6" fill="var(--sel)"/>
+      </svg>
+      <div class="brand-text">
+        <div class="brand-name">TabForge Pocket</div>
+        <div class="song" id="song-title">Loading…</div>
+      </div>
+    </div>
+    <button class="icon-btn primary" id="btn-open" aria-label="Open a song">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-menu" aria-label="Settings and export">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+  </header>
+  <div class="chips" id="chips"></div>
+  <div class="tab-wrap" id="tab-wrap">
+    <svg class="tab-svg" id="tab" role="img" aria-label="Guitar tablature"></svg>
+    <div class="playhead" id="playhead"></div>
+  </div>
+  <div class="fretboard" id="fretboard"><svg id="fb" viewBox="0 0 900 132" role="img" aria-label="Fretboard"></svg></div>
+  <footer class="transport">
+    <div class="t-main">
+      <button class="icon-btn" id="btn-prev" aria-label="Previous bar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>
+      </button>
+      <button class="play" id="btn-play" aria-label="Play">
+        <svg id="ico-play" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg>
+        <svg id="ico-pause" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" hidden aria-hidden="true"><rect x="6" y="4" width="4.5" height="16" rx="1"/><rect x="13.5" y="4" width="4.5" height="16" rx="1"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-next" aria-label="Next bar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
+      </button>
+    </div>
+    <div class="time" id="time">0:00.0 <small>/ 0:00</small></div>
+    <div id="bar-label" class="hint">bar 1</div>
+    <div class="t-row">
+      <div class="seg" id="speed" role="group" aria-label="Playback speed"></div>
+      <button class="tbtn" id="btn-loop">Loop</button>
+      <button class="tbtn" id="btn-metro">Click</button>
+      <button class="tbtn on" id="btn-follow">Follow</button>
+      <button class="tbtn" id="btn-fb">Fretboard</button>
+    </div>
+  </footer>
+</div>
+<input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" hidden>
+<div id="layer"></div>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script>/*__ENGINE__*/</script>
+<script>/*__UI__*/</script>
