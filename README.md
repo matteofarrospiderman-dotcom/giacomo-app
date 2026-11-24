@@ -1,4 +1,4 @@
-# TabForge AI: music-to-guitar-tab transcription
+# TabForge: music-to-guitar-tab transcription
 
 TabForge analyses an uploaded song or guitar recording (MP3, WAV, FLAC, OGG, M4A, AIFF…)
 and reconstructs it as **playable guitar tablature**, standard notation, MIDI, separated
