@@ -9,6 +9,8 @@ Method
    magnitude: percussive -> ``drums``.
 2. The harmonic part is split by frequency with smooth crossovers: content dominated by
    energy below ~160 Hz -> ``bass``.
+   The guitar stem is *not* low-cut at 160 Hz (only below 55 Hz) so guitar fundamentals
+   survive; bass bleed is removed at note level by the pipeline's cross-stem cleanup.
 3. Vocal estimate: REPET-SIM (Rafii & Pardo 2012) finds the repeating accompaniment by
    nearest-neighbour filtering of similar frames; the non-repeating, centre-panned
    residual in the 180 Hz-7 kHz band is assigned to ``vocals``.
@@ -69,7 +71,11 @@ class DSPSeparator:
         m_voc = m_voc_raw * centre**2 * band * 0.9
 
         m_bass = m_harm * lp
-        m_guitar = np.clip(m_harm * (1 - lp) - m_voc, 0, 1)
+        # The guitar stem stays full-range above 55 Hz: guitar fundamentals (E2 = 82 Hz, drop
+        # tunings lower) overlap the bass band, and losing them causes octave errors that are
+        # far worse than bass bleed, which the cross-stem cleanup removes later.
+        hp = (1.0 / (1.0 + (55.0 / np.maximum(freqs, 1.0)) ** 8))[:, None]
+        m_guitar = np.clip(m_harm * hp - m_voc, 0, 1)
         m_voc = np.clip(m_voc * (1 - lp), 0, 1)
 
         progress(0.75, "Reconstructing stems")

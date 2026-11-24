@@ -30,6 +30,13 @@ HOP = 512
 
 
 def _onset_env(y: np.ndarray, sr: int, fmax: float | None = None) -> np.ndarray:
+    if fmax is not None and fmax < 1000:
+        # low-band flux straight from STFT bins (a mel bank this narrow would have empty filters)
+        S = np.abs(librosa.stft(y, n_fft=2048, hop_length=HOP))
+        freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
+        L = np.log1p(100 * S[(freqs >= 30) & (freqs <= fmax)])
+        flux = np.maximum(np.diff(L, axis=1, prepend=L[:, :1]), 0).sum(axis=0)
+        return flux.astype(np.float32)
     S = librosa.feature.melspectrogram(y=y, sr=sr, hop_length=HOP, n_mels=96, fmax=fmax or sr / 2)
     return librosa.onset.onset_strength(S=librosa.power_to_db(S), sr=sr, hop_length=HOP, aggregate=np.median)
 
@@ -86,24 +93,32 @@ def _beat_sync(feature: np.ndarray, beat_frames: np.ndarray) -> np.ndarray:
         return np.zeros(len(beat_frames))
     vals = []
     for i, f in enumerate(beat_frames):
-        lo = max(0, f - 2)
+        lo = max(0, f - 3)
         hi = min(len(feature), f + 3)
         vals.append(feature[lo:hi].max() if hi > lo else 0.0)
     v = np.asarray(vals, dtype=float)
     return (v - v.mean()) / (v.std() + 1e-9)
 
 
-def _harmonic_change(y: np.ndarray, sr: int, beat_frames: np.ndarray) -> np.ndarray:
+def _harmonic_change(y: np.ndarray, sr: int, beat_frames: np.ndarray) -> tuple[np.ndarray, float]:
+    """Chord-change strength at each beat, and how harmonic the signal is (0..1).
+
+    For purely percussive input chroma is flat noise, so the cue is down-weighted by the
+    median chroma peakiness (max/mean per frame): ~1.3 for noise, ~1.9+ for music.
+    """
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=HOP)
     if chroma.shape[1] < 3 or len(beat_frames) < 3:
-        return np.zeros(len(beat_frames))
+        return np.zeros(len(beat_frames)), 0.0
+    peaky = float(np.median(chroma.max(axis=0) / (chroma.mean(axis=0) + 1e-9)))
+    harmonicity = float(np.clip((peaky - 1.35) / 0.5, 0, 1))
     sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
     sync = sync / (np.linalg.norm(sync, axis=0, keepdims=True) + 1e-9)
-    # change *into* beat i = distance between segment before and after beat i
+    # sync() returns len(beats)+1 segments: column i is the span *ending* at beat i, column
+    # i+1 the span *starting* at beat i, so the change at beat i compares columns i and i+1
     change = np.zeros(len(beat_frames))
-    for i in range(1, min(len(beat_frames), sync.shape[1])):
-        change[i] = 1.0 - float(np.dot(sync[:, i - 1], sync[:, i]))
-    return (change - change.mean()) / (change.std() + 1e-9)
+    for i in range(min(len(beat_frames), sync.shape[1] - 1)):
+        change[i] = 1.0 - float(np.dot(sync[:, i], sync[:, i + 1]))
+    return (change - change.mean()) / (change.std() + 1e-9), harmonicity
 
 
 def _subdivision_ratio(oenv: np.ndarray, beat_frames: np.ndarray) -> float:
@@ -135,10 +150,18 @@ def analyze_rhythm(y_mix: np.ndarray, sr: int, y_drums: np.ndarray | None = None
     beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=HOP)
     duration = len(y_mix) / sr
 
-    # Refine the global BPM from the actual beat grid (median inter-beat interval).
+    # Refine the global BPM from the beat grid. Individual beat times are quantised to the
+    # onset-envelope hop (~23 ms), so a median of intervals is biased; a robust linear fit of
+    # beat time against beat index gives sub-frame precision.
     if len(beat_times) > 4:
         ibi = np.diff(beat_times)
-        bpm = float(60.0 / np.median(ibi))
+        idx = np.arange(len(beat_times))
+        slope = float(np.polyfit(idx, beat_times, 1)[0])
+        resid = beat_times - np.polyval(np.polyfit(idx, beat_times, 1), idx)
+        good = np.abs(resid) < 3 * (np.std(resid) + 1e-9)
+        if good.sum() > 4:
+            slope = float(np.polyfit(idx[good], beat_times[good], 1)[0])
+        bpm = float(60.0 / slope) if slope > 0 else float(60.0 / np.median(ibi))
         tempo_stability = float(1.0 - np.clip(np.std(ibi) / (np.mean(ibi) + 1e-9) * 4, 0, 1))
     else:
         tempo_stability = 0.0
@@ -147,7 +170,7 @@ def analyze_rhythm(y_mix: np.ndarray, sr: int, y_drums: np.ndarray | None = None
     low_env = _onset_env(y_beat, sr, fmax=200.0)
     accent = _beat_sync(oenv, beat_frames)
     low_accent = _beat_sync(low_env, beat_frames)
-    harm = _harmonic_change(y_mix, sr, beat_frames)
+    harm, harmonicity = _harmonic_change(y_mix, sr, beat_frames)
     meter_priors = {4: 1.0, 3: 0.55, 2: 0.35, 6: 0.15, 5: 0.06, 7: 0.05}
     hyps = []
     n = len(beat_frames)
@@ -159,7 +182,7 @@ def analyze_rhythm(y_mix: np.ndarray, sr: int, y_drums: np.ndarray | None = None
             mask = np.zeros(n, bool)
             mask[idx] = True
             s = 0.45 * (low_accent[mask].mean() - low_accent[~mask].mean())
-            s += 0.35 * (harm[mask].mean() - harm[~mask].mean())
+            s += 0.35 * harmonicity * (harm[mask].mean() - harm[~mask].mean())
             s += 0.20 * (accent[mask].mean() - accent[~mask].mean())
             hyps.append({"beats_per_bar": m, "phase": p, "score": float(s), "posterior": float(s + 0.35 * np.log(pri))})
     if hyps:

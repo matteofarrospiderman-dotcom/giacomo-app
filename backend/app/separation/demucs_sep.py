@@ -49,7 +49,12 @@ class DemucsSeparator:
         try:
             self._load()
         except Exception as e:  # noqa: BLE001
-            return False, f"Demucs weights unavailable: {str(e)[:160]}"
+            msg = str(e)
+            if any(k in msg for k in ("urlopen", "Tunnel", "403", "Connection", "resolve", "timed out")):
+                return False, ("Demucs weights could not be downloaded (no internet access to "
+                               "dl.fbaipublicfiles.com). Run scripts/download_models.py on a connected machine "
+                               "or copy the weights into models/demucs")
+            return False, f"Demucs weights unavailable: {msg[:160]}"
         return True, "ok"
 
     def _load(self):

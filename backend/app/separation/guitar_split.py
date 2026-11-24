@@ -88,7 +88,10 @@ def split_guitars(stereo: np.ndarray, sr: int) -> dict:
     for k, m in enumerate(modes):
         chans = [librosa.istft(X[c] * weights[k], hop_length=HOP, length=stereo.shape[-1]) for c in range(2)]
         audio = np.stack(chans).astype(np.float32)
-        side = "left" if m["pan"] < -0.25 else "right" if m["pan"] > 0.25 else "center"
+        if len(modes) == 2 and modes[1]["pan"] - modes[0]["pan"] >= 0.4:
+            side = "left" if k == 0 else "right"  # relative placement of the two parts
+        else:
+            side = "left" if m["pan"] < -0.25 else "right" if m["pan"] > 0.25 else "center"
         parts.append({"id": f"guitar_{side}", "label": f"Guitar ({side})", "pan": m["pan"], "share": m["share"],
                       "audio": audio})
         mono = audio.mean(axis=0)

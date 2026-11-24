@@ -35,7 +35,7 @@ from .guitar.tunings import TUNINGS, Tuning, custom_tuning, get_tuning
 from .separation import STEM_LABELS, get_separator
 from .separation.guitar_split import split_guitars
 from .tone.analyzer import analyze_tone
-from .transcription import dsp_poly, ensemble, parts as parts_mod, techniques
+from .transcription import dsp_poly, echo, ensemble, parts as parts_mod, techniques
 
 SR = settings.analysis_sr
 SR22 = 22050
@@ -96,18 +96,57 @@ def run_ensemble(audio: np.ndarray, instrument: str, prog) -> dict:
 HARMONIC_BLEED = {19: 0.65, 24: 0.65, 28: 0.65, 31: 0.65, 36: 0.65, 12: 0.45}
 
 
-def cross_stem_cleanup(results: list[dict]) -> dict:
+def cross_stem_cleanup(results: list[dict], approximate_separation: bool = False) -> dict:
     """Remove notes that are bleed from another stem.
 
     * guitar notes sitting on an upper harmonic of a simultaneous bass note, with weak
       evidence of their own (the octave is treated more leniently: guitars often double
       bass riffs an octave up);
     * bass-stem notes in the guitar register that duplicate a guitar note (same pitch,
-      same onset) and are less confident there.
+      same onset) and are less confident there;
+    * guitar notes in the bass register that duplicate a bass note (unison bleed) - only
+      trusted strongly when separation was approximate (DSP), where bleed is certain;
+    * notes duplicated across guitar parts that came from the stereo splitter: the note is
+      kept in the part where the model heard it loudest.
     """
     guitars = [r for r in results if r["instrument"] == "guitar"]
     basses = [r for r in results if r["instrument"] == "bass"]
-    removed = {"guitar_bass_harmonics": 0, "bass_guitar_duplicates": 0}
+    removed = {"guitar_bass_harmonics": 0, "bass_guitar_duplicates": 0, "guitar_bass_unison": 0,
+               "guitar_part_duplicates": 0}
+    unison_conf = 0.95 if approximate_separation else 0.5
+    for g in guitars:
+        keep = []
+        for n in g["notes"]:
+            # below standard E2 the bass is by far the likelier owner of a shared note
+            dup = n.pitch < 40 and any(
+                m.pitch == n.pitch and abs(m.start - n.start) < 0.06
+                and n.confidence < (unison_conf if approximate_separation else min(unison_conf, m.confidence))
+                for b in basses for m in b["notes"])
+            if dup:
+                n.flags.add("rejected:bleed_from_bass")
+                g["rejected"].append(n)
+                removed["guitar_bass_unison"] += 1
+            else:
+                keep.append(n)
+        g["notes"] = keep
+    for i, g1 in enumerate(guitars):
+        for g2 in guitars[i + 1:]:
+            drop1, drop2 = set(), set()
+            for a in g1["notes"]:
+                for b in g2["notes"]:
+                    if a.pitch == b.pitch and abs(a.start - b.start) < 0.05:
+                        if a.amplitude >= b.amplitude:
+                            drop2.add(id(b))
+                        else:
+                            drop1.add(id(a))
+            for res, drop in ((g1, drop1), (g2, drop2)):
+                if drop:
+                    res["rejected"].extend(n for n in res["notes"] if id(n) in drop)
+                    for n in res["notes"]:
+                        if id(n) in drop:
+                            n.flags.add("rejected:duplicate_of_other_guitar_part")
+                    res["notes"] = [n for n in res["notes"] if id(n) not in drop]
+                    removed["guitar_part_duplicates"] += len(drop)
     for g in guitars:
         keep = []
         for n in g["notes"]:
@@ -147,6 +186,39 @@ def cross_stem_cleanup(results: list[dict]) -> dict:
     return removed
 
 
+def merge_echo_evidence(tone: dict, echo_info: dict | None, bpm: float) -> None:
+    """Combine the note-domain delay estimate with the envelope-based one."""
+    if not tone.get("available") or not echo_info:
+        return
+    for e in tone["effects"]:
+        if e["key"] != "delay":
+            continue
+        ms = round(echo_info["time_s"] * 1000)
+        d = e["details"]
+        if e["detected"] and abs(d.get("time_ms", 0) - ms) < 40:
+            e["confidence"] = round(min(0.95, e["confidence"] + 0.15), 2)
+        elif not e["detected"]:
+            beat = 60.0 / max(bpm, 1)
+            names = {0.25: "1/16", 0.5: "1/8", 0.75: "dotted 1/8", 1.0: "1/4", 1 / 3: "1/8 triplet", 1.5: "dotted 1/4"}
+            rel = echo_info["time_s"] / beat
+            best = min(names, key=lambda r: abs(rel - r))
+            synced = abs(rel - best) < 0.06 * best
+            d.update({"detected": True, "time_ms": ms, "feedback_percent": d.get("feedback_percent", 30),
+                      "estimated_mix_percent": d.get("estimated_mix_percent", 30), "tempo_synced": synced,
+                      "note_value": names[best] if synced else None})
+            e["detected"] = True
+            e["confidence"] = echo_info["confidence"]
+            e["summary"] = f"{ms} ms" + (f" ({names[best]})" if synced else "") + " – from repeated quieter notes"
+        else:
+            continue
+        from .tone.analyzer import tier  # noqa: PLC0415
+
+        e["tier"] = tier(e["confidence"])
+        d.setdefault("evidence", []).append(
+            f"{echo_info['pairs']} notes are repeated {echo_info['time_s'] * 1000:.0f} ms later at lower level "
+            f"({echo_info.get('removed', 0)} echo notes removed from the tab)")
+
+
 def build_part_tracks(pid: str, track_id: str, name: str, stem_name: str, res: dict, instrument: str, rhythm: dict,
                       analysis: dict, tuning_opt, prog, overlap_sal=None, allow_split: bool = True,
                       role: str = "full", strings: int | None = None) -> list[dict]:
@@ -156,6 +228,9 @@ def build_part_tracks(pid: str, track_id: str, name: str, stem_name: str, res: d
     y22 = res["y22"]
     duration = len(y22) / SR22
     priors = learning.load_priors()
+    prog(0.6, "Removing delay echoes")
+    res["notes"], echoes, echo_info = echo.suppress_echoes(res["notes"], y22, res.get("salience"))
+    res["rejected"].extend(echoes)
     prog(0.62, "Detecting playing techniques")
     tech = techniques.detect(res["notes"], y22, res["f0"], res["polyphony"],
                              beat_times=np.array(rhythm.get("beats", [])))
@@ -180,7 +255,7 @@ def build_part_tracks(pid: str, track_id: str, name: str, stem_name: str, res: d
     for k, (tid, tname, trole, evs) in enumerate(groups):
         prog(0.8 + 0.18 * k / len(groups), f"Fingering {tname}")
         extra = {"tuning_detection": detected, "dead_strums": tech["dead_strums"], "strums": tech["strums"],
-                 "part_split": split_info, "transcription_stats": res["stats"]}
+                 "part_split": split_info, "transcription_stats": res["stats"], "echo_analysis": echo_info}
         tr = build_track(tid, tname, stem_name, instrument, trole, evs, res["rejected"] if k == 0 else [], tuning,
                          rhythm, duration, res["engines"], extra=extra, priors=priors, overlap_salience=overlap_sal,
                          own_salience=res["salience"], chords=analysis.get("chords"))
@@ -308,7 +383,8 @@ def process(pid: str) -> None:
         lo = 0.5 + i * span
         res = run_ensemble(aud, inst, prog.sub("transcribe", lo, lo + 0.6 * span))
         results.append(res)
-    analysis["cross_stem_cleanup"] = cross_stem_cleanup(results)
+    analysis["cross_stem_cleanup"] = cross_stem_cleanup(
+        results, approximate_separation=analysis["separation"]["quality"] != "neural")
     for i, ((tid, label, stem, aud, inst), res) in enumerate(zip(targets, results)):
         lo = 0.5 + i * span
         sub = prog.sub("transcribe", lo + 0.6 * span, lo + span)
@@ -321,6 +397,7 @@ def process(pid: str) -> None:
             prog("tone", i / max(1, len(targets)), 0.88, 0.97, f"Analysing tone of {label}")
             notes_all = [n for t in trs for n in t["notes"]]
             tone_results[stem] = analyze_tone(aud, SR, notes_all, rh["bpm"], duration, trs[0].get("_contours", []))
+            merge_echo_evidence(tone_results[stem], trs[0].get("echo_analysis"), rh["bpm"])
         for t in trs:
             t.pop("_contours", None)
         results[i] = None
@@ -329,7 +406,7 @@ def process(pid: str) -> None:
     # key from the transcription (pitch-class durations) fused with the chroma estimate
     gnotes_all = [n for t in all_tracks for n in t["notes"]]
     if gnotes_all:
-        analysis["key"] = harmony.fuse_key(analysis["key"], gnotes_all)
+        analysis["key"] = harmony.fuse_key(analysis["key"], gnotes_all, analysis.get("chords"))
         meta_key = analysis["key"]["name"]
     else:
         analysis["key"].pop("_corr", None)

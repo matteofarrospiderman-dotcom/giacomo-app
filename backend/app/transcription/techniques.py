@@ -164,19 +164,28 @@ def merge_bend_chains(notes: list[NoteEvent], attack_ref: float) -> tuple[list[N
         if id(a) in used:
             continue
         chain = [a]
-        j = i + 1
         peak = a.pitch
         rising = True
-        while j < len(order):
-            prev, b = chain[-1], order[j]
-            if b.start - prev.end > 0.04:
+        while True:
+            prev = chain[-1]
+            # next step: earliest note 1-2 semitones away that starts around prev's end;
+            # notes further away in pitch belong to other voices and are ignored
+            cand = None
+            for b in order[i + 1:]:
+                if b.start > prev.end + 0.12:
+                    break
+                if id(b) in used or b in chain or b.start < prev.end - 0.06:
+                    continue
+                step = b.pitch - prev.pitch
+                if 1 <= abs(step) <= 2:
+                    cand = b
+                    break
+            if cand is None:
                 break
-            if b.start < prev.end - 0.04 or id(b) in used:
-                j += 1
-                continue
+            b = cand
             step = b.pitch - prev.pitch
-            weak = getattr(b, "attack", 1.0) < 0.3 * attack_ref or "no_onset" in b.flags
-            if not weak or step == 0 or abs(step) > 2:
+            weak = getattr(b, "attack", 1.0) < 0.35 * attack_ref or "no_onset" in b.flags or b.onset_strength < 0.5
+            if not weak:
                 break
             if rising and step > 0 and b.pitch - a.pitch <= 3:
                 peak = b.pitch
@@ -185,7 +194,6 @@ def merge_bend_chains(notes: list[NoteEvent], attack_ref: float) -> tuple[list[N
             else:
                 break
             chain.append(b)
-            j += 1
         rise_time = next((c.start for c in chain if c.pitch == peak), a.start) - a.start
         if len(chain) >= 2 and peak > a.pitch and rise_time >= 0.12:
             hop = a.contour_hop

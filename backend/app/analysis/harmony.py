@@ -107,7 +107,7 @@ def estimate_key(chroma_mean: np.ndarray) -> dict:
     return best
 
 
-def fuse_key(chroma_key: dict, notes: list[dict]) -> dict:
+def fuse_key(chroma_key: dict, notes: list[dict], chords: list[dict] | None = None) -> dict:
     """Combine the chroma key estimate with one from transcribed pitch classes.
 
     Chroma is biased by overtones (the 5th harmonic of E is G#, pushing E minor towards
@@ -120,6 +120,17 @@ def fuse_key(chroma_key: dict, notes: list[dict]) -> dict:
         prof[n["pitch"] % 12] += w
     if prof.sum() <= 0:
         return chroma_key
+    # tonic evidence from the harmony: the first chord and the most frequent chord roots
+    root_w = np.zeros(12)
+    first_root = None
+    for c in chords or []:
+        if c.get("root") is None or c.get("confidence", 0) < 0.3:
+            continue
+        if first_root is None:
+            first_root = c["root"]
+        root_w[c["root"]] += c["end"] - c["start"]
+    if root_w.sum() > 0:
+        root_w /= root_w.max()
     best = None
     for mode, kk in (("major", KK_MAJOR), ("minor", KK_MINOR)):
         for tonic in range(12):
@@ -129,6 +140,7 @@ def fuse_key(chroma_key: dict, notes: list[dict]) -> dict:
             w_maj, w_min = prof[(tonic + 4) % 12], prof[(tonic + 3) % 12]
             third = (w_maj - w_min) / (w_maj + w_min + 1e-9) if (w_maj + w_min) > 0.02 * prof.sum() else 0.0
             r_notes += 0.12 * (third if mode == "major" else -third)
+            r_notes += 0.06 * root_w[tonic] + (0.05 if tonic == first_root else 0.0)
             r = 0.6 * r_notes + 0.4 * r_chroma
             if best is None or r > best[0]:
                 best = (r, tonic, mode, r_notes)
