@@ -186,3 +186,11 @@ pre.tabtext {
 .hint { font-size: 12px; color: var(--muted); }
 .count-in { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; z-index: 25; font: 700 96px var(--display); color: var(--accent); text-shadow: 0 4px 30px rgba(0,0,0,.4); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+
+.problem {
+  position: fixed; left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+  top: calc(12px + env(safe-area-inset-top, 0px)); z-index: 60; background: var(--panel); border: 1px solid var(--bad);
+  border-radius: 14px; padding: 14px 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); display: grid; gap: 6px;
+}
+.problem strong { font: 600 16px var(--display); color: var(--bad); }
+.problem p { margin: 0; color: var(--fg-2); font-size: 14px; }

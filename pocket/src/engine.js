@@ -51,7 +51,7 @@
   const openMidi = (tun, s) => tun.notes[tun.notes.length - s];
 
   // ------------------------------------------------------------------ inference
-  async function runModel(tf, model, y, onProgress) {
+  async function runModel(tf, model, y, onProgress, opts = {}) {
     const nOrig = y.length;
     const padded = new Float32Array(OVERLAP / 2 + nOrig);
     padded.set(y, OVERLAP / 2);
@@ -62,7 +62,9 @@
     const onset = new Float32Array(nT * P);
     const contour = new Float32Array(nT * PC);
     const half = OVERLAP_FRAMES / 2;
-    const batch = 4;
+    // one 2-second window at a time: larger batches multiply the GPU memory the network needs
+    // (4 windows reserved ~1.8 GB of WebGL textures, enough to get the page killed on a phone)
+    const batch = opts.batch || 1;
     for (let b0 = 0; b0 < starts.length; b0 += batch) {
       const cs = starts.slice(b0, b0 + batch);
       const x = new Float32Array(cs.length * AUDIO_N);

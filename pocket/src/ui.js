@@ -211,6 +211,9 @@
   async function ensureModel(onStep) {
     if (S.model) return S.model;
     onStep && onStep("Loading the note model");
+    // free GPU textures as soon as a tensor is disposed instead of pooling them: the pool grows
+    // to hundreds of MB, which phones (especially in-app browsers) do not survive
+    try { tf.env().set("WEBGL_DELETE_TEXTURE_THRESHOLD", 0); } catch { /* older TF.js */ }
     try { await tf.setBackend("webgl"); } catch { /* fall back below */ }
     await tf.ready();
     if (tf.getBackend() !== "webgl") await tf.setBackend("cpu");
@@ -220,50 +223,120 @@
     return S.model;
   }
 
+  // Blob.arrayBuffer() is missing on older iOS; FileReader works everywhere
+  function readArrayBuffer(blob) {
+    if (blob.arrayBuffer) return blob.arrayBuffer();
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = () => rej(fr.error || new Error("Could not read the file"));
+      fr.readAsArrayBuffer(blob);
+    });
+  }
+
   async function decodeTo22k(arrayBuffer) {
-    const tmp = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 1, 44100);
+    // decodeAudioData resamples to the context's rate, so decoding in a 22.05 kHz context gives
+    // the model's input directly: no full-quality copy, no second rendering pass
+    const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const tmp = new Ctx(1, 1, E.SR);
     const buf = await new Promise((res, rej) => {
       const p = tmp.decodeAudioData(arrayBuffer, res, rej);
       if (p && p.then) p.then(res, rej);
     });
-    const len = Math.ceil(buf.duration * E.SR);
-    const off = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, len, E.SR);
-    const src = off.createBufferSource();
-    src.buffer = buf;
-    src.connect(off.destination);
-    src.start();
-    const out = await off.startRendering();
-    return out.getChannelData(0).slice();
+    if (buf.sampleRate !== E.SR) {
+      // very old WebKit ignores the context rate: resample once
+      const off = new Ctx(1, Math.ceil(buf.duration * E.SR), E.SR);
+      const src = off.createBufferSource();
+      src.buffer = buf;
+      src.connect(off.destination);
+      src.start();
+      return (await off.startRendering()).getChannelData(0).slice();
+    }
+    const n = buf.length;
+    const out = new Float32Array(n);
+    const ch = buf.numberOfChannels;
+    for (let c = 0; c < ch; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < n; i++) out[i] += d[i] / ch;
+    }
+    return out;
   }
 
+  // ------------------------------------------------------------------ crash breadcrumbs & errors
+  // If the phone kills the page (out of memory), no code runs; the breadcrumb tells the next
+  // visit what was happening so the person gets an explanation instead of a blank error.
+  function breadcrumb(info) { store.set("lastRun", info ? { ...info, at: Date.now() } : null); }
+
+  // self-contained (no helpers declared later), so it also works for errors during start-up
+  function showProblem(title, detail) {
+    const el = document.querySelector(".problem") || document.createElement("div");
+    el.className = "problem";
+    el.setAttribute("role", "alert");
+    el.textContent = "";
+    const t = document.createElement("strong");
+    t.textContent = title;
+    const p = document.createElement("p");
+    p.textContent = detail;
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.textContent = "Dismiss";
+    b.addEventListener("click", () => el.remove());
+    el.append(t, p, b);
+    document.body.appendChild(el);
+  }
+
+  window.addEventListener("error", (e) => {
+    e.preventDefault();
+    showProblem("Something failed inside TabForge Pocket", `${e.message || "Unknown error"}. Screenshot this message if it keeps happening.`);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    e.preventDefault();
+    const msg = (e.reason && (e.reason.message || String(e.reason))) || "Unknown error";
+    showProblem("Something failed inside TabForge Pocket", `${msg}. Screenshot this message if it keeps happening.`);
+  });
+
   let cancelled = false;
+  const MAX_SECONDS = 600;
   async function transcribeBlob(blob, title) {
     cancelled = false;
     const steps = ["Decoding audio", "Loading the note model", "Listening for notes", "Choosing strings and frets"];
     const ui = progress(steps);
+    const sizeMB = Math.round((blob.size / 1048576) * 10) / 10;
     try {
       ui.step(0);
-      const y = await decodeTo22k(await blob.arrayBuffer());
+      breadcrumb({ step: "decoding the audio", title, sizeMB });
+      let y = await decodeTo22k(await readArrayBuffer(blob));
       const dur = y.length / E.SR;
-      if (dur > 600) throw new Error("This song is longer than 10 minutes. Trim it first.");
       if (dur < 1) throw new Error("The file is too short.");
+      if (dur > MAX_SECONDS) throw new Error(`This song is ${Math.round(dur / 60)} minutes long. Pocket handles up to ${MAX_SECONDS / 60} minutes; trim it first.`);
       ui.step(1);
+      breadcrumb({ step: "loading the note model", title, sizeMB, dur });
       const model = await ensureModel();
       if (cancelled) return;
-      ui.step(2, `${tf.getBackend() === "webgl" ? "GPU" : "CPU"} · ${Math.round(dur)} s of audio`);
+      ui.step(2, `${tf.getBackend() === "webgl" ? "GPU" : "CPU"} · ${fmt(dur, true)} of audio`);
+      breadcrumb({ step: "listening for notes", title, sizeMB, dur, backend: tf.getBackend() });
       const post = await E.runModel(tf, model, y, (p) => { ui.meter(p); if (cancelled) throw new Error("cancelled"); });
       ui.step(3);
+      breadcrumb({ step: "choosing strings and frets", title, sizeMB, dur });
       await new Promise((r) => setTimeout(r, 30));
       const doc = E.transcribe(post, dur, { tuningId: "auto", minConfidence: store.get("minConf", 0.45) }, y);
+      y = null; // the samples are no longer needed; let them be collected
       E.refinger(doc, store.get("prior", null));
-      S.y = y;
       setSong(doc, title, blob, "s" + Date.now());
       saveSong();
+      breadcrumb(null);
       ui.close();
       toast(`${visibleNotes().length} notes in ${doc.measures.length} bars`);
     } catch (e) {
+      breadcrumb(null);
       ui.close();
-      if (e.message !== "cancelled") toast(e.message && e.message.length < 120 ? e.message : "Could not read this audio file. Try MP3, M4A or WAV.", true);
+      if (e.message === "cancelled") return;
+      const msg = e && e.message ? e.message : String(e);
+      if (/decode|EncodingError|Unable to decode|NotSupported/i.test(msg + (e && e.name))) {
+        showProblem("This file could not be read", "Try an MP3, M4A (AAC) or WAV file. Songs bought from Apple Music are protected and cannot be opened.");
+      } else {
+        showProblem("Transcription stopped", msg);
+      }
     }
   }
 
@@ -981,6 +1054,14 @@
   }
   syncTransport();
   loadDemo();
+  const last = store.get("lastRun", null);
+  if (last && Date.now() - last.at < 24 * 3600 * 1000) {
+    breadcrumb(null);
+    showProblem("The last transcription did not finish",
+      `The page stopped while ${last.step} for "${last.title}" (${last.sizeMB} MB${last.dur ? `, ${fmt(last.dur, true)}` : ""}). ` +
+      "This usually means the phone ran out of memory for this page. It now uses much less memory, so try again. " +
+      "If it happens again, open the link in Safari instead of the Claude app, or try a shorter clip.");
+  }
   // expose for automated tests
   window.__pocket = { S, transcribeBlob, frame };
 })();
