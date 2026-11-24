@@ -99,8 +99,9 @@ OPEN_SHAPES = [
 ]
 
 
-def _shape_bonus(pos: tuple[tuple[int, int], ...], n_strings: int) -> float:
-    if n_strings != 6 or len(pos) < 3:
+def _shape_bonus(pos: tuple[tuple[int, int], ...], n_strings: int, standard: bool = True) -> float:
+    # the shapes are standard-tuning chord grips; in drop D / DADGAD / open G they are other chords
+    if n_strings != 6 or len(pos) < 3 or not standard:
         return 0.0
     frets = {s: f for s, f in pos}
     for shape in OPEN_SHAPES:
@@ -127,6 +128,8 @@ class FingeringOptimizer:
         self.w = PROFILES.get(profile, PROFILES["balanced"])
         self.priors = priors or {}
         self.top_k = top_k
+        # capo shifts every string equally, so "standard" means standard intervals
+        self._standard = [n - tuning.notes[0] for n in tuning.notes] == [0, 5, 10, 15, 19, 24]
 
     # ------------------------------------------------------------------ intrinsic
     def _prior_cost(self, pitch: int, string: int, fret: int) -> float:
@@ -172,7 +175,7 @@ class FingeringOptimizer:
             cost += 0.15 * max(0, fingers - 3)
             if barre:
                 cost += 0.2
-            cost -= _shape_bonus(pos, self.t.strings)
+            cost -= _shape_bonus(pos, self.t.strings, self._standard)
         elif len(pos) == 2:
             (s1, _), (s2, _) = pos
             cost += 0.1 * max(0, abs(s1 - s2) - 2)

@@ -115,3 +115,75 @@ def test_tone_recommendation(client, project):
     r = client.get(f"/api/projects/{project}/tone/guitar/recommend", params={"amp": "boss_katana", "pedals": "delay"})
     assert r.status_code == 200
     assert r.json()["chain"]
+
+
+# ---------------------------------------------------------------- regressions from code review
+
+
+def _guitar_tid(client, project):
+    return next(t for t in client.get(f"/api/projects/{project}/tracks").json() if t["instrument"] == "guitar")["id"]
+
+
+def test_validation_rejects_bad_input(client, project):
+    tid = _guitar_tid(client, project)
+    base = f"/api/projects/{project}/tracks/{tid}"
+    assert client.post(f"{base}/notes", json={"start": 1.0, "end": 1.2, "string": 3, "fret": -3}).status_code == 422
+    assert client.post(f"{base}/notes", json={"start": 1.0, "end": 1.2, "string": 3}).status_code == 400
+    note = client.get(base).json()["notes"][0]
+    r = client.patch(f"{base}/notes/{note['id']}", json={"techniques": [{"type": "bend", "semitones": "full"}]})
+    assert r.status_code == 400
+    assert client.post(f"{base}/settings", json={"time_signature": [3]}).status_code == 400
+    assert client.post(f"{base}/settings", json={"time_signature": [7, 16]}).status_code == 400
+    r = client.post(f"/api/projects/{project}/reprocess", json={"separator": "bogus"})
+    assert r.status_code == 400
+    assert client.get(f"/api/projects/{project}").json()["options"]["separator"] != "bogus"
+    assert client.post(f"/api/projects/{project}/reprocess", json={"strings": 4}).status_code == 400
+
+
+def test_same_string_collision_is_refused_and_gp5_stays_valid(client, project):
+    tid = _guitar_tid(client, project)
+    base = f"/api/projects/{project}/tracks/{tid}"
+    track = client.get(base).json()
+    a = next(n for n in track["notes"] if n.get("string"))
+    # a second note on the same string at the same moment is refused
+    r = client.post(f"{base}/notes", json={"start": a["start"] + 0.01, "end": a["end"], "string": a["string"], "fret": 7})
+    assert r.status_code == 409
+    # a fast legato note 45 ms later quantises onto the same tick: export must still parse
+    r = client.post(f"{base}/notes", json={"start": a["start"] + 0.045, "end": a["start"] + 0.2, "string": a["string"],
+                                           "fret": (a["fret"] or 0) + 2})
+    assert r.status_code == 201
+    g = client.get(f"/api/projects/{project}/export/gp5")
+    assert g.status_code == 200
+    guitarpro.parse(io.BytesIO(g.content))
+
+
+def test_unicode_name_exports(client, project):
+    from app import storage
+
+    meta = storage.load_project(project)
+    meta["name"] = "Кино – песня"
+    storage.save_project(meta)
+    for fmt in ("gp5", "musicxml", "txt", "pdf", "midi"):
+        r = client.get(f"/api/projects/{project}/export/{fmt}")
+        assert r.status_code == 200, fmt
+        assert "filename*=UTF-8''" in r.headers["content-disposition"]
+
+
+def test_export_respects_track_order_and_quantized_midi_snaps(client, project):
+    ids = [t["id"] for t in client.get(f"/api/projects/{project}/tracks").json()]
+    if len(ids) >= 2:
+        r = client.get(f"/api/projects/{project}/export/midi", params={"tracks": f"{ids[1]},{ids[0]}"})
+        mf = mido.MidiFile(file=io.BytesIO(r.content))
+        names = [m.name for t in mf.tracks for m in t if m.type == "track_name"]
+        assert names[1].startswith(client.get(f"/api/projects/{project}/tracks/{ids[1]}").json()["name"][:10])
+    r = client.get(f"/api/projects/{project}/export/midi", params={"quantized": True})
+    mf = mido.MidiFile(file=io.BytesIO(r.content))
+    ticks = []
+    for tr in mf.tracks[1:]:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if msg.type == "note_on":
+                ticks.append(t)
+    # every onset sits on a 1/32 (60-tick at 480 PPQ) or triplet grid position
+    assert all(t % 60 == 0 or t % 40 == 0 for t in ticks)

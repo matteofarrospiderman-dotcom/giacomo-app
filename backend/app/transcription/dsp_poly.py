@@ -27,8 +27,8 @@ from .base import NoteEvent
 SR = 22050
 HOP = 256
 BPO = 36
-FMIN_MIDI = 28  # E1
-N_PITCH = 72  # E1..D#7
+FMIN_MIDI = 23  # B0 (5-string bass)
+N_PITCH = 77  # B0..D#7
 N_HARM = 8
 
 

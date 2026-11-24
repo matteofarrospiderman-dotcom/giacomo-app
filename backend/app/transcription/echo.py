@@ -46,8 +46,14 @@ def _pitch_level(sal: dict | None, env: np.ndarray, n: NoteEvent) -> float:
             f = int(n.start * SR / HOP)
             seg = sal["salience"][p, f: f + 5]
             if seg.size:
-                return float(20 * np.log10(seg.max() + 1e-6))
-    return _onset_level(env, n.start)
+                # the salience is already log-compressed, so it is used as a linear level and
+                # compared by ratio (0.85 ~ a repeat 3 dB quieter); see _quieter()
+                return float(seg.max())
+    return float(10 ** (_onset_level(env, n.start) / 20))
+
+
+def _quieter(later: float, earlier: float) -> bool:
+    return later <= 0.85 * earlier
 
 
 def find_delay(notes: list[NoteEvent], y22: np.ndarray, min_pairs: int = 5, sal: dict | None = None) -> dict | None:
@@ -66,7 +72,7 @@ def find_delay(notes: list[NoteEvent], y22: np.ndarray, min_pairs: int = 5, sal:
                 d = b.start - a.start
                 if d > 1.2:
                     break
-                if d >= 0.12 and lv[id(b)] <= lv[id(a)] - 1.5:
+                if d >= 0.12 and _quieter(lv[id(b)], lv[id(a)]):
                     lags.append(d)
     if len(lags) < min_pairs:
         return None
@@ -107,7 +113,7 @@ def suppress_echoes(notes: list[NoteEvent], y22: np.ndarray, sal: dict | None = 
                 continue
             d = b.start - a.start
             for mult, tol in ((1, 0.025), (2, 0.035)):
-                if abs(d - mult * T) <= tol and lv[id(b)] <= lv[id(a)] - 1.5:
+                if abs(d - mult * T) <= tol and _quieter(lv[id(b)], lv[id(a)]):
                     echoes.add(id(b))
                     break
             if id(b) in echoes:

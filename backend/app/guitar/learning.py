@@ -18,6 +18,7 @@ roadmap item is fine-tuning the transcription network on accumulated corrections
 
 from __future__ import annotations
 
+import copy
 import threading
 
 from ..config import settings
@@ -40,9 +41,9 @@ def _path():
 
 
 def load_priors() -> dict:
-    data = read_json(_path(), default=dict(DEFAULTS))
+    data = read_json(_path(), default=copy.deepcopy(DEFAULTS))
     for k, v in DEFAULTS.items():
-        data.setdefault(k, v if not isinstance(v, dict) else dict(v))
+        data.setdefault(k, copy.deepcopy(v))
     return data
 
 

@@ -287,6 +287,10 @@ def process(pid: str) -> None:
     src = pdir / meta["source"]["file"]
     t_start = time.time()
 
+    # a full (re)process replaces every track; drop files from earlier runs and on-demand jobs
+    for old in (pdir / "tracks").glob("*.json"):
+        old.unlink()
+
     # ------------------------------------------------------------------ decode
     prog("decode", 0.1, 0, 0.05, "Decoding audio")
     audio = aio.decode(src, SR, 2)
@@ -486,7 +490,13 @@ def run_job(kind: str, pid: str, args: dict) -> None:
         tb = traceback.format_exc()
         try:
             meta = storage.load_project(pid)
-            meta["status"].update({"state": "failed", "message": f"{type(e).__name__}: {e}", "error": tb[-4000:]})
+            if kind == "process":
+                meta["status"].update({"state": "failed", "message": f"{type(e).__name__}: {e}", "error": tb[-4000:]})
+            else:
+                # the earlier analysis is still valid: keep the project open and report the error
+                meta["status"].update({"state": "done", "stage": "done", "progress": 1.0,
+                                       "message": f"Transcription failed: {type(e).__name__}: {e}",
+                                       "last_error": tb[-4000:]})
             storage.save_project(meta)
         except Exception:  # noqa: BLE001
             pass

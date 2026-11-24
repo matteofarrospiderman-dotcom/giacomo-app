@@ -112,6 +112,9 @@ def _harmonic_change(y: np.ndarray, sr: int, beat_frames: np.ndarray) -> tuple[n
     peaky = float(np.median(chroma.max(axis=0) / (chroma.mean(axis=0) + 1e-9)))
     harmonicity = float(np.clip((peaky - 1.35) / 0.5, 0, 1))
     sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+    if len(beat_frames) and beat_frames[0] == 0:
+        # sync() omits the empty span before a beat at frame 0; keep columns aligned (i, i+1)
+        sync = np.hstack([sync[:, :1], sync])
     sync = sync / (np.linalg.norm(sync, axis=0, keepdims=True) + 1e-9)
     # sync() returns len(beats)+1 segments: column i is the span *ending* at beat i, column
     # i+1 the span *starting* at beat i, so the change at beat i compares columns i and i+1
@@ -210,7 +213,7 @@ def analyze_rhythm(y_mix: np.ndarray, sr: int, y_drums: np.ndarray | None = None
     tempo_curve = []
     if len(beat_times) > 2:
         ibi = np.diff(beat_times)
-        smooth = np.convolve(ibi, np.ones(5) / 5, mode="same") if len(ibi) >= 5 else ibi
+        smooth = np.convolve(np.pad(ibi, 2, mode="edge"), np.ones(5) / 5, mode="valid") if len(ibi) >= 5 else ibi
         tempo_curve = [{"t": float(t), "bpm": float(60 / d)} for t, d in zip(beat_times[:-1], smooth)]
 
     return {

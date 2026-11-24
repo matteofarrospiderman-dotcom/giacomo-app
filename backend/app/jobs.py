@@ -17,11 +17,16 @@ import logging
 import multiprocessing as mp
 import threading
 from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 
 from . import storage
 from .config import settings
 
 log = logging.getLogger("tabforge.jobs")
+
+
+class JobBusy(Exception):
+    """A job is already running for this project."""
 
 
 class JobManager:
@@ -44,23 +49,52 @@ class JobManager:
         with self._lock:
             f = self._futures.get(pid)
             if f is not None and not f.done():
-                raise RuntimeError("A job is already running for this project")
-            storage.set_status(pid, "queued", "queued", 0.0, "Waiting for a worker")
-            fut = self._get_pool().submit(run_job, kind, pid, args or {})
-            self._futures[pid] = fut
-            fut.add_done_callback(lambda f, pid=pid: self._done(pid, f))
-
-    def _done(self, pid: str, fut: Future) -> None:
-        exc = fut.exception()
-        if exc is not None:
-            log.error("job for %s failed: %s", pid, exc)
+                raise JobBusy("A job is already running for this project")
+            # remember what is running so a restart re-runs the same job, not a full reprocess
+            meta = storage.load_project(pid)
+            meta["status"].update({"state": "queued", "stage": "queued", "progress": 0.0,
+                                   "message": "Waiting for a worker", "job": {"kind": kind, "args": args or {}}})
+            meta["status"].pop("error", None)
+            storage.save_project(meta)
             try:
-                meta = storage.load_project(pid)
-                if meta["status"].get("state") not in ("failed",):
-                    meta["status"].update({"state": "failed", "message": f"Worker crashed: {exc}"})
-                    storage.save_project(meta)
+                fut = self._get_pool().submit(run_job, kind, pid, args or {})
+            except BrokenProcessPool:
+                # a worker died (out of memory, segfault): start a fresh pool and retry once
+                log.warning("process pool was broken; restarting it")
+                self._reset_pool()
+                fut = self._get_pool().submit(run_job, kind, pid, args or {})
+            self._futures[pid] = fut
+            fut.add_done_callback(lambda f, pid=pid, kind=kind: self._done(pid, kind, f))
+
+    def _reset_pool(self) -> None:
+        pool, self._pool = self._pool, None
+        if pool is not None:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _done(self, pid: str, kind: str, fut: Future) -> None:
+        exc = fut.exception()
+        if exc is None:
+            return
+        log.error("job %s for %s failed: %s", kind, pid, exc)
+        if isinstance(exc, BrokenProcessPool):
+            self._reset_pool()
+        try:
+            meta = storage.load_project(pid)
+            st = meta["status"]
+            if st.get("state") in ("queued", "processing"):
+                msg = "The worker process stopped unexpectedly (often out of memory)"
+                if kind == "process":
+                    st.update({"state": "failed", "message": f"{msg}: {exc}"})
+                else:
+                    # an on-demand transcription failed; the existing results stay usable
+                    st.update({"state": "done", "stage": "done", "progress": 1.0, "message": f"{msg}: {exc}",
+                               "last_error": str(exc)})
+                storage.save_project(meta)
+        except Exception:  # noqa: BLE001
+            pass
 
     def is_running(self, pid: str) -> bool:
         f = self._futures.get(pid)
@@ -72,16 +106,25 @@ class JobManager:
         for meta in storage.list_projects():
             state = meta.get("status", {}).get("state")
             if state in ("uploaded", "queued", "processing") and meta.get("source"):
+                job = meta.get("status", {}).get("job") or {"kind": "process", "args": {}}
                 try:
-                    self.submit("process", meta["id"])
+                    self.submit(job.get("kind", "process"), meta["id"], job.get("args") or {})
                     n += 1
                 except Exception as e:  # noqa: BLE001
                     log.warning("could not recover %s: %s", meta["id"], e)
         return n
 
     def shutdown(self) -> None:
-        if self._pool is not None:
-            self._pool.shutdown(wait=False, cancel_futures=True)
+        """Stop immediately: running jobs are killed and re-queued by recover() on next start."""
+        pool = self._pool
+        if pool is None:
+            return
+        for proc in list(getattr(pool, "_processes", {}).values()):
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 jobs = JobManager()

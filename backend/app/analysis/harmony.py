@@ -77,12 +77,20 @@ def chord_name(root: int, quality: str, bass: int | None = None, flats: bool = F
     return s
 
 
+def _corr(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson correlation that is 0 (not NaN) for silent or constant profiles."""
+    if np.std(a) < 1e-12 or np.std(b) < 1e-12:
+        return 0.0
+    r = float(np.corrcoef(a, b)[0, 1])
+    return r if np.isfinite(r) else 0.0
+
+
 def estimate_key(chroma_mean: np.ndarray) -> dict:
     best = None
     scores = []
     for mode, prof in (("major", KK_MAJOR), ("minor", KK_MINOR)):
         for tonic in range(12):
-            r = float(np.corrcoef(np.roll(prof, tonic), chroma_mean)[0, 1])
+            r = _corr(np.roll(prof, tonic), chroma_mean)
             scores.append((r, tonic, mode))
     scores.sort(key=lambda x: -x[0])
     r, tonic, mode = scores[0]
@@ -134,7 +142,7 @@ def fuse_key(chroma_key: dict, notes: list[dict], chords: list[dict] | None = No
     best = None
     for mode, kk in (("major", KK_MAJOR), ("minor", KK_MINOR)):
         for tonic in range(12):
-            r_notes = float(np.corrcoef(np.roll(kk, tonic), prof)[0, 1])
+            r_notes = _corr(np.roll(kk, tonic), prof)
             r_chroma = chroma_key.get("_corr", {}).get(f"{tonic}{mode}", r_notes)
             # the third decides the mode: transcribed notes have no overtone bias here
             w_maj, w_min = prof[(tonic + 4) % 12], prof[(tonic + 3) % 12]

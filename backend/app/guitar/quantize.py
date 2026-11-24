@@ -53,13 +53,27 @@ def make_grid(rhythm: dict, duration: float, time_signature: tuple[int, int] | N
 
 
 def time_to_beat(t: float | np.ndarray, beats: np.ndarray) -> np.ndarray:
+    """Fractional beat index; extrapolates linearly outside the grid (pickups, tails)."""
     idx = np.arange(len(beats), dtype=float)
-    return np.interp(t, beats, idx, left=None, right=None)
+    t = np.asarray(t, dtype=float)
+    out = np.interp(t, beats, idx)
+    if len(beats) >= 2:
+        p0 = beats[1] - beats[0]
+        p1 = beats[-1] - beats[-2]
+        out = np.where(t < beats[0], (t - beats[0]) / p0, out)
+        out = np.where(t > beats[-1], idx[-1] + (t - beats[-1]) / p1, out)
+    return out
 
 
 def beat_to_time(b: float | np.ndarray, beats: np.ndarray) -> np.ndarray:
+    """Time of a fractional beat index; extrapolates linearly outside the grid."""
     idx = np.arange(len(beats), dtype=float)
-    return np.interp(b, idx, beats)
+    b = np.asarray(b, dtype=float)
+    out = np.interp(b, idx, beats)
+    if len(beats) >= 2:
+        out = np.where(b < 0, beats[0] + b * (beats[1] - beats[0]), out)
+        out = np.where(b > idx[-1], beats[-1] + (b - idx[-1]) * (beats[-1] - beats[-2]), out)
+    return out
 
 
 def quantize(notes: list[dict], grid: dict, force_first_bar: int | None = None) -> dict:
@@ -180,6 +194,17 @@ def build_measures(notes: list[dict], grid: dict, measures: list[dict]) -> list[
         if n.get("tick") is None:
             continue
         by_tick.setdefault(n["tick"], []).append(n)
+    # a string can sound only one note per notated beat: when two land on the same tick and
+    # string (e.g. a fast hammer-on quantised onto its source note), keep the later one, which is
+    # what is heard at this rhythmic resolution. Writers such as GP5 cannot store both.
+    for t, ns in by_tick.items():
+        seen: dict[int, dict] = {}
+        for n in sorted(ns, key=lambda n: n["start"]):
+            s = n.get("string")
+            if s is None:
+                continue
+            seen[s] = n
+        by_tick[t] = [n for n in ns if n.get("string") is None or seen.get(n["string"]) is n]
     onsets = sorted(by_tick)
     total_ticks = len(measures) * bar_ticks
     events = []  # (tick, duration, note_ids)

@@ -58,6 +58,20 @@ def export_midi(tracks: list[dict], analysis: dict, quantized: bool = False, per
     b0 = float(time_to_beat(0.0, beats))
     per_string = (len(tracks) == 1) if per_string is None else per_string
 
+    snap: dict[str, tuple[int, int]] = {}
+    if quantized:
+        # constant tempo + notes snapped to the rhythmic grid (bar 0 starts at tick 0)
+        from ..guitar.quantize import quantize  # noqa: PLC0415
+
+        tracks = [dict(t, notes=[dict(n) for n in t["notes"]]) for t in tracks]
+        firsts = [quantize(t["notes"], grid).get("first_bar_beat", 0) for t in tracks]
+        first = min(firsts) if firsts else 0
+        for t in tracks:
+            quantize(t["notes"], grid, force_first_bar=first)
+            for n in t["notes"]:
+                if n.get("tick") is not None:
+                    snap[n["id"]] = (int(n["tick"] * PPQ / 960), int(n["dur_ticks"] * PPQ / 960))
+
     def to_tick(t: float) -> int:
         if quantized:
             return int(round(t * grid["bpm"] / 60.0 * qn_per_beat * PPQ))
@@ -121,7 +135,11 @@ def export_midi(tracks: list[dict], analysis: dict, quantized: bool = False, per
                 end, vel = start + 0.05, 40
             elif any(t["type"] == "palm_mute" for t in n.get("techniques", [])):
                 end = min(end, start + 0.18)
-            t_on, t_off = to_tick(start), max(to_tick(start) + 1, to_tick(end))
+            if quantized and n.get("id") in snap:
+                t_on, dur = snap[n["id"]]
+                t_off = t_on + max(1, dur)
+            else:
+                t_on, t_off = to_tick(start), max(to_tick(start) + 1, to_tick(end))
             curve = _bend_curve(n)
             if curve:
                 for t, v in curve:

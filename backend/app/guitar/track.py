@@ -79,7 +79,7 @@ def finalize(track: dict, rhythm: dict, duration: float, priors: dict | None = N
     playable = []
     for n in notes:
         n["flags"] = [f for f in n.get("flags", []) if f not in ("out_of_range", "impossible_fingering")]
-        if n["pitch"] < eff.notes[0] or n["pitch"] > eff.notes[-1] + max_fret:
+        if n["pitch"] < min(eff.notes) or n["pitch"] > max(eff.notes) + max_fret:
             _flag(n, "out_of_range")
             n["string"] = n["fret"] = None
         else:

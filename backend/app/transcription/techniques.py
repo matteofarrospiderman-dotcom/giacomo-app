@@ -101,20 +101,21 @@ def detect_vibrato(n: NoteEvent) -> dict | None:
         return None
     hop = n.contour_hop
     skip = int(0.08 / hop)
-    seg = c[skip:]
+    seg = np.asarray(c[skip:], dtype=float)
     if len(seg) * hop < 0.25:
         return None
-    win = max(3, int(0.16 / hop) | 1)
-    trend = np.convolve(seg, np.ones(win) / win, mode="same")
-    d = seg - trend
-    d = d[win // 2: len(d) - win // 2] if len(d) > win else d
+    # a quadratic detrend removes slow drift/bends without attenuating the 3.5-9 Hz wobble
+    # (a moving average biased depth by rate)
+    x = np.linspace(-1, 1, len(seg))
+    d = seg - np.polyval(np.polyfit(x, seg, 2), x)
     if len(d) < 12:
         return None
     d = d - d.mean()
     ac = np.correlate(d, d, mode="full")[len(d) - 1:]
     if ac[0] <= 1e-9:
         return None
-    ac = ac / ac[0]
+    # unbiased normalisation (divide by the overlap length) so short notes can reach the threshold
+    ac = (ac / np.arange(len(d), 0, -1)) / (ac[0] / len(d))
     lag_min = int(1 / 9.0 / hop)
     lag_max = min(len(ac) - 1, int(1 / 3.5 / hop))
     if lag_max <= lag_min + 1:

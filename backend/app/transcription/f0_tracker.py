@@ -57,16 +57,27 @@ def track(y22: np.ndarray, fmin: float = 60.0, fmax: float = 1500.0) -> dict | N
         return None
     engine = "pyin"
     f0 = conf = None
+    n = int(np.ceil(len(y22) / HOP)) + 1
     if pref in ("auto", "crepe"):
         try:
             f0, conf = _crepe(y22, fmin, fmax)
             engine = f"crepe-{settings.crepe_model}"
+            # CREPE runs at 16 kHz with a 186-sample hop (11.625 ms), not exactly 256/22050 s:
+            # resample onto the shared frame grid or the track drifts ~0.2 s over 3 minutes
+            hop16 = int(round(HOP * 16000 / SR))
+            src_t = np.arange(len(f0)) * hop16 / 16000
+            dst_t = np.arange(n) * HOP / SR
+            voiced = f0 > 0
+            f0 = np.interp(dst_t, src_t, np.where(voiced, f0, 0.0), right=0.0)
+            conf = np.interp(dst_t, src_t, conf, right=0.0)
+            # do not invent pitches by interpolating between voiced and unvoiced frames
+            mask = np.interp(dst_t, src_t, voiced.astype(float), right=0.0) > 0.99
+            f0 = np.where(mask, f0, 0.0)
         except Exception:  # noqa: BLE001 - torch/torchcrepe missing -> pyin
             f0 = None
     if f0 is None:
         # pYIN is O(n * thresholds); cap at ~6 minutes of audio for responsiveness
         f0, conf = _pyin(y22[: SR * 360], fmin, fmax)
-    n = int(np.ceil(len(y22) / HOP)) + 1
     f0 = np.pad(f0, (0, max(0, n - len(f0))))[:n]
     conf = np.pad(conf, (0, max(0, n - len(conf))))[:n]
     midi = np.where(f0 > 0, librosa.hz_to_midi(np.maximum(f0, 1e-3)), np.nan)

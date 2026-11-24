@@ -25,8 +25,16 @@ KEY_BY_FIFTHS_MAJOR = {k.value[0]: k for k in m.KeySignature if k.value[1] == 0}
 KEY_BY_FIFTHS_MINOR = {k.value[0]: k for k in m.KeySignature if k.value[1] == 1}
 
 
+def _cp1252(text: str) -> str:
+    """GP5 strings are cp1252: replace characters it cannot store instead of crashing."""
+    return str(text).encode("cp1252", "replace").decode("cp1252")
+
+
 def _bend(t: dict) -> m.BendEffect:
-    st = float(t.get("semitones", 1.0))
+    try:
+        st = float(t.get("semitones", 1.0))
+    except (TypeError, ValueError):
+        st = 1.0
     if t["type"] == "bend_release":
         pts = [m.BendPoint(0, 0), m.BendPoint(3, st), m.BendPoint(6, st), m.BendPoint(9, 0), m.BendPoint(12, 0)]
         kind = m.BendType.bendRelease
@@ -70,7 +78,9 @@ def build_song(tracks: list[dict], analysis: dict, title: str, tones: dict | Non
     rhythm = analysis["rhythm"]
     duration = analysis["duration"]
     aligned, grid, measures = aligned_tracks(tracks, rhythm, duration)
-    song = m.Song(title=title, tab="TabForge AI transcription", tempo=int(round(grid.get("bpm", rhythm["bpm"]))))
+    # GP5 tempo is in quarter notes per minute; the grid's BPM counts beats (dotted quarters in 6/8)
+    qpm = grid.get("bpm", rhythm["bpm"]) * grid.get("ticks_per_beat", 960) / 960
+    song = m.Song(title=_cp1252(title), tab="TabForge AI transcription", tempo=int(round(qpm)))
     song.tracks = []
     fifths, mode = key_fifths(analysis.get("key"))
     keysig = (KEY_BY_FIFTHS_MINOR if mode == "minor" else KEY_BY_FIFTHS_MAJOR).get(fifths, m.KeySignature.CMajor)
@@ -86,12 +96,14 @@ def build_song(tracks: list[dict], analysis: dict, title: str, tones: dict | Non
         start += meas["ticks"]
     song.measureHeaders = headers
 
+    free_channels = [c for c in range(16) if c != 9]  # 9 is the General MIDI drum channel
     for ti, tr in enumerate(aligned):
         tuning = tr["_tuning"]
-        channel = 2 * ti if 2 * ti < 9 else 2 * ti + 1
-        track = m.Track(song, number=ti + 1, name=tr["name"][:40], fretCount=int(tr.get("max_fret", 24)),
+        channel = free_channels[(2 * ti) % len(free_channels)]
+        effect_channel = free_channels[(2 * ti + 1) % len(free_channels)]
+        track = m.Track(song, number=ti + 1, name=_cp1252(tr["name"])[:40], fretCount=int(tr.get("max_fret", 24)),
                         offset=int(tr.get("capo", 0)),
-                        channel=m.MidiChannel(channel=channel, effectChannel=channel + 1,
+                        channel=m.MidiChannel(channel=channel, effectChannel=effect_channel,
                                               instrument=gm_program(tr, (tones or {}).get(tr["stem"]))))
         track.strings = [m.GuitarString(s, tuning.open_midi(s)) for s in range(1, tuning.strings + 1)]
         track.measures = [m.Measure(track, h) for h in headers]
@@ -125,7 +137,7 @@ def build_song(tracks: list[dict], analysis: dict, title: str, tones: dict | Non
                 strum = next((t for ref in b["notes"] if (nn := idx.get(ref["id"])) and not ref["tie"]
                               for t in nn.get("techniques", []) if t["type"] == "strum"), None)
                 if strum and len(beat.notes) >= 3:
-                    beat.effect.stroke = m.BeatStroke(direction=m.BeatStrokeDirection.down if strum["direction"] == "down"
+                    beat.effect.stroke = m.BeatStroke(direction=m.BeatStrokeDirection.down if strum.get("direction") == "down"
                                                       else m.BeatStrokeDirection.up, value=16)
                 if not beat.notes and not b["rest"]:
                     beat.status = m.BeatStatus.rest

@@ -27,7 +27,9 @@ SR = 22050
 HOP = 256
 
 INSTRUMENT_RANGE = {"guitar": (28, 96), "bass": (23, 72)}
-F0_RANGE = {"guitar": (65.0, 1400.0), "bass": (30.0, 450.0)}
+# floors sit just below the lowest supported string (B1 on 7-string / drop B guitars, B0 on
+# 5-string bass), otherwise the tracker locks onto the second harmonic of those notes
+F0_RANGE = {"guitar": (38.0, 1400.0), "bass": (29.0, 450.0)}
 GHOST_INTERVALS = (12, 19, 24, 28, 31)  # harmonics 2,3,4,5,6 above a fundamental
 
 
