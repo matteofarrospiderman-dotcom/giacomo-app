@@ -1,0 +1,7 @@
+# Optional neural models (strongly recommended for real songs).
+# CPU wheels:  pip install -r requirements-ml.txt --extra-index-url https://download.pytorch.org/whl/cpu
+# CUDA:        pip install -r requirements-ml.txt  (default PyPI wheels include CUDA on Linux)
+torch>=2.2
+torchaudio>=2.2
+demucs>=4.0.1      # htdemucs_6s source separation (guitar/piano/bass/drums/vocals/other)
+torchcrepe>=0.0.22 # CREPE monophonic pitch tracking (weights ship with the package)

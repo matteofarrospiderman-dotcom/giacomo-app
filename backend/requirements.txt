@@ -1,0 +1,15 @@
+# Core runtime (CPU-only, no PyTorch needed). Python 3.10-3.13.
+numpy>=1.26
+scipy>=1.11
+librosa>=0.10.2
+soundfile>=0.12
+onnxruntime>=1.17        # runs the Basic Pitch network (use onnxruntime-gpu for CUDA)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+mido>=1.3
+PyGuitarPro>=0.9
+reportlab>=4.0
+# NOTE: basic-pitch must be installed WITHOUT its dependencies (it pins TensorFlow):
+#   pip install --no-deps "basic-pitch==0.4.0"
+# scripts/setup.sh does this for you.
