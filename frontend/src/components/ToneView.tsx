@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { pct, tierColor } from "../lib/format";
 import type { Analysis, Effect, Recommendation } from "../lib/types";
@@ -76,6 +76,7 @@ export default function ToneView({ id, analysis, notify }: { id: string; analysi
   const [guitar, setGuitar] = useState(() => localStorage.getItem("tf.guitar") ?? "");
   const [rec, setRec] = useState<Recommendation | null>(null);
   const tone = analysis.tone?.[stem];
+  const reqSeq = useRef(0);
 
   useEffect(() => {
     api.gear().then(setGear).catch(() => undefined);
@@ -85,7 +86,10 @@ export default function ToneView({ id, analysis, notify }: { id: string; analysi
     localStorage.setItem("tf.pedals", JSON.stringify(pedals));
     localStorage.setItem("tf.guitar", guitar);
     if (!stem) return;
-    api.recommend(id, stem, amp, pedals, guitar || undefined).then(setRec).catch((e) => notify(e.message, true));
+    const seq = ++reqSeq.current;
+    api.recommend(id, stem, amp, pedals, guitar || undefined)
+      .then((r) => { if (seq === reqSeq.current) setRec(r); }) // drop out-of-order answers
+      .catch((e) => notify(e.message, true));
   }, [id, stem, amp, pedals, guitar, notify]);
 
   const grouped = useMemo(() => {
@@ -98,15 +102,18 @@ export default function ToneView({ id, analysis, notify }: { id: string; analysi
   }, [tone]);
 
   if (!stems.length) return <div className="notice">No guitar stem was analysed for tone.</div>;
-  if (!tone?.available) return <div className="notice">Tone analysis unavailable for this stem.</div>;
+  const chips = (
+    <div className="row">
+      <span className="sub">Guitar part</span>
+      <div className="chips">
+        {stems.map((s) => <button key={s} className={`chip ${s === stem ? "on" : ""}`} onClick={() => setStem(s)}>{analysis.stems[s]?.label ?? s}</button>)}
+      </div>
+    </div>
+  );
+  if (!tone?.available) return <div className="col" style={{ gap: 16 }}>{chips}<div className="notice">Tone analysis unavailable for this part.</div></div>;
   return (
     <div className="col" style={{ gap: 16 }}>
-      <div className="row">
-        <span className="sub">Guitar part</span>
-        <div className="chips">
-          {stems.map((s) => <button key={s} className={`chip ${s === stem ? "on" : ""}`} onClick={() => setStem(s)}>{analysis.stems[s]?.label ?? s}</button>)}
-        </div>
-      </div>
+      {chips}
       <div className="grid cols-3">
         <div className="card">
           <h3>Amp character</h3>

@@ -33,13 +33,23 @@ export default function Workspace({ id, tab }: { id: string; tab?: string }) {
 
   useEffect(() => () => player.destroy(), [player]);
 
+  const toastTimer = useRef(0);
   const notify = useCallback((msg: string, bad = false) => {
     setToast({ msg, bad });
-    window.setTimeout(() => setToast(null), 3500);
+    window.clearTimeout(toastTimer.current); // an older timer must not hide a newer message
+    toastTimer.current = window.setTimeout(() => setToast(null), 3500);
+  }, []);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
   }, []);
 
   const loadResults = useCallback(async () => {
     const [a, ts] = await Promise.all([api.analysis(id), api.tracks(id)]);
+    if (!alive.current) return; // left the project while loading: do not start a new player
     setAnalysis(a);
     setTracks(ts);
     setTrackId((cur) => (cur && ts.some((t) => t.id === cur) ? cur : ts.find((t) => t.instrument === "guitar")?.id ?? ts[0]?.id ?? null));
@@ -109,8 +119,13 @@ export default function Workspace({ id, tab }: { id: string; tab?: string }) {
             className="sm"
             onClick={async () => {
               if (!confirm("Re-run the full analysis? Manual edits to tracks will be replaced.")) return;
-              await api.reprocess(id, {});
-              restartPolling();
+              try {
+                player.pause();
+                await api.reprocess(id, {});
+                restartPolling();
+              } catch (e) {
+                notify((e as Error).message, true);
+              }
             }}
           >
             Re-analyse
@@ -118,7 +133,14 @@ export default function Workspace({ id, tab }: { id: string; tab?: string }) {
         )}
       </div>
       {processing ? (
-        <ProgressPanel project={project} onRetry={async () => { await api.reprocess(id, {}); restartPolling(); }} />
+        <ProgressPanel project={project} onRetry={async () => {
+          try {
+            await api.reprocess(id, {});
+            restartPolling();
+          } catch (e) {
+            notify((e as Error).message, true);
+          }
+        }} />
       ) : analysis ? (
         <>
           <Transport player={player} analysis={analysis} />
@@ -133,6 +155,7 @@ export default function Workspace({ id, tab }: { id: string; tab?: string }) {
             <AnalysisView id={id} analysis={analysis} tracks={tracks} player={player} notify={notify}
               onTranscribe={async (stem, instrument) => {
                 try {
+                  player.pause();
                   await api.transcribe(id, stem, instrument);
                   notify(`Transcribing ${stem} as ${instrument}…`);
                   restartPolling();

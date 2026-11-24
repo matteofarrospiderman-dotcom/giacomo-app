@@ -3,9 +3,10 @@ const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 export const midiName = (m: number) => `${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
 
 export function fmtTime(t: number): string {
-  if (!isFinite(t)) return "0:00.0";
-  const m = Math.floor(t / 60);
-  const s = t - m * 60;
+  if (!isFinite(t) || t < 0) t = 0;
+  const tenths = Math.round(t * 10); // round once so 59.97 s becomes 1:00.0, not 0:60.0
+  const m = Math.floor(tenths / 600);
+  const s = (tenths - m * 600) / 10;
   return `${m}:${s.toFixed(1).padStart(4, "0")}`;
 }
 

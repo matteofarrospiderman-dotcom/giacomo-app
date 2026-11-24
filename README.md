@@ -26,6 +26,7 @@ review flags, and alternatives are offered wherever it is unsure.
 - [Quick start](#quick-start)
 - [Setup in detail](#setup-in-detail) (dependencies, models, GPU)
 - [Running](#running)
+- [Using it on your phone](#using-it-on-your-phone)
 - [Using the app](#using-the-app)
 - [Architecture](#architecture)
 - [How each feature works](#how-each-feature-works) (algorithm, models, limitations, how to improve)
@@ -145,6 +146,39 @@ startup.
 
 ---
 
+## Using it on your phone
+
+There are two ways to use TabForge on a phone.
+
+1. **TabForge Pocket: nothing to install.**
+   - `pocket/` is a single-page version that runs entirely on the phone:
+     - Basic Pitch runs in TF.js on the GPU.
+     - The note decoder, technique detection, tempo tracking and the fingering optimiser are
+       ported to JavaScript.
+   - You open a song file from the phone. The page gives synced tab, a fretboard, slow-down,
+     bar looping, a count-in metronome and note editing, and saves songs on the device.
+   - It has no source separation, so it works best on solo guitar recordings or on a guitar
+     stem exported from the full app.
+   - Build it with `pocket/build.py` (see `pocket/README.md`) and host `pocket/dist/` on any
+     static HTTPS host.
+2. **The full app over Wi-Fi.** Run the server on your computer so the phone can reach it:
+   ```bash
+   cd backend && . .venv/bin/activate
+   uvicorn app.main:app --host 0.0.0.0 --port 8000
+   ```
+   - The startup log prints the address to open on the phone, e.g.
+     `http://192.168.1.20:8000`. The phone must be on the same network.
+   - Use **Add to Home Screen** to install it like an app; a manifest and icons are included.
+   - The editor is touch-friendly:
+     - tap a note to open its details as a bottom sheet,
+     - tap a bar number to loop it, then another bar number to extend the loop,
+     - drag on the waveform to loop a time range,
+     - use "Play from here".
+   - Browsers allow the screen wake lock only on HTTPS. To keep the screen on over plain
+     HTTP, put the server behind an HTTPS tunnel or reverse proxy.
+
+---
+
 ## Using the app
 
 1. **Dashboard**
@@ -167,8 +201,11 @@ startup.
      - The tab scrolls with playback and highlights the notes that are sounding.
      - Note colours show confidence: white = high, amber = medium, red = low,
        violet = edited by you. A dashed box marks a flagged note.
-     - Speed runs from 25 % to 150 % with pitch preserved. Drag on the tab or waveform to
-       set an A–B loop. A metronome can click on the detected beats.
+     - Speed runs from 25 % to 150 % with pitch preserved.
+     - Tap a bar number to loop that bar; tap a second bar number to extend the loop.
+     - Drag on the tab or waveform to loop any time range.
+     - A metronome can click on the detected beats. The screen stays on while playing.
+     - Media keys, headphone buttons and Bluetooth pedals control playback.
    - **Fretboard**
      - Shows the sounding notes live.
      - Click a position to move the selected note there; dashed rings are the alternatives.
@@ -192,7 +229,7 @@ startup.
      | `Space` | play / pause |
      | `←` `→` | previous / next note |
      | `↑` `↓` | move the note to another string |
-     | `0`–`9` | type a fret |
+     | `0`–`9` | type a fret (two digits within 0.6 s, e.g. `1` `2` = 12) |
      | `+` `-` | pitch up / down a semitone |
      | `Del` | delete the note |
      | `L` | loop on / off |
@@ -234,7 +271,8 @@ backend/   FastAPI + background worker processes (ProcessPoolExecutor, spawn, re
   app/tone/            analyzer (effects detection), recommend (signal chain for user gear)
   app/export/          gp5, musicxml, midi, pdf, ascii_tab
   scripts/             setup.sh, download_models.py, make_demo_song.py, evaluate.py
-  tests/               28 pytest tests incl. full HTTP round trip and synthetic ground truth
+  tests/               37 pytest tests incl. full HTTP round trip, review regressions, ground truth
+pocket/    on-device phone version (TF.js Basic Pitch + JS port of the guitar engine)
 ```
 
 **Pipeline** (`app/pipeline.py`):
@@ -254,8 +292,9 @@ upload ─▶ FFmpeg decode/validate ─▶ source separation ─▶ instrument 
   f0 tracker), so it can be swapped or upgraded independently.
 - Heavy work runs in separate processes, so a model crash or out-of-memory never takes the
   API down. Workers are recycled after each job to release memory.
-- Large arrays are written to disk as soon as they are produced. Only 22 kHz mono copies
-  stay in memory, which keeps a 10-minute song under about 2 GB.
+- Stems are written to disk as soon as they are produced. Analysis then works mostly on
+  22 kHz mono copies, although the full-rate guitar stem and the transcription results stay
+  in memory during transcription. Budget about 2–3 GB of RAM for a 10-minute song.
 - Storage is plain files: JSON plus WAV/MP3 per project, with atomic writes. There is no
   database to run.
 
@@ -508,7 +547,7 @@ limitations**, and **how accuracy can be improved**.
 - **Limits:** browser time-stretching sounds grainy below about 40 % speed.
 
 ### Exports
-- **GP5** (PyGuitarPro) keeps tunings, capo, tempo, time and key signature, ties, triplets,
+- **GP5** (PyGuitarPro, up to 7 strings) keeps tunings, capo, tempo, time and key signature, ties, triplets,
   hammer-ons, slides, bends with points, vibrato, palm mute, let ring, dead notes, tremolo
   picking and strum direction, all tracks.
   - GPX/GP (Guitar Pro 6–8) is a closed format with no maintained open writer. Guitar Pro
@@ -574,7 +613,7 @@ The full OpenAPI schema is at `/docs`. Main endpoints:
 
 ```bash
 cd backend && . .venv/bin/activate
-pytest -q                                                   # 28 tests, ~1 minute on CPU
+pytest -q                                                   # 37 tests, ~1 minute on CPU
 python scripts/make_demo_song.py data/demo
 python scripts/evaluate.py data/demo/demo_song.wav          # full-pipeline accuracy report
 cd ../frontend && npm run typecheck && npm run build

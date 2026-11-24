@@ -28,20 +28,20 @@ export default function Transport({ player, analysis }: { player: Player; analys
       <span className="time">{fmtTime(t)} <span className="muted">/ {fmtTime(dur)}</span></span>
       <span className="sub mono">bar {bar}</span>
       <div className="row" title="Playback speed – pitch is preserved">
-        <span className="sub">Speed</span>
-        <select value={st.rate} onChange={(e) => player.setRate(Number(e.target.value))}>
+        <span className="sub hide-narrow">Speed</span>
+        <select value={st.rate} onChange={(e) => { player.setRate(Number(e.target.value)); e.currentTarget.blur(); }}>
           {RATES.map((r) => <option key={r} value={r}>{Math.round(r * 100)}%</option>)}
         </select>
       </div>
       <button className={st.loopOn ? "active sm" : "sm"} disabled={!st.loop} onClick={() => player.toggleLoop()} title="Toggle loop (L)">
-        Loop {st.loop ? `${fmtTime(st.loop[0])}–${fmtTime(st.loop[1])}` : "(drag on waveform/tab)"}
+        Loop {st.loop ? `${fmtTime(st.loop[0])}–${fmtTime(st.loop[1])}` : <span className="hide-narrow">(tap a bar number)</span>}
       </button>
       {st.loop && <button className="ghost sm" onClick={() => player.setLoop(null)}>Clear</button>}
       <button className={st.metronome ? "active sm" : "sm"} onClick={() => player.setMetronome(!st.metronome)} title="Click on detected beats">
-        Metronome
+        <span className="hide-narrow">Metronome</span><span className="show-narrow">Click</span>
       </button>
       <div className="grow" />
-      <span className="sub">Listening to: {st.sources.filter((s) => (st.sources.some((x) => x.solo) ? s.solo : !s.muted)).map((s) => s.label).join(", ") || "nothing"}</span>
+      <span className="sub hide-narrow">Listening to: {st.sources.filter((s) => (st.sources.some((x) => x.solo) ? s.solo : !s.muted)).map((s) => s.label).join(", ") || "nothing"}</span>
     </div>
   );
 }

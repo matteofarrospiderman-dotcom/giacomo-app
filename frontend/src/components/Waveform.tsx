@@ -92,16 +92,19 @@ export default function Waveform({ id, peaksPath, duration, player, height = 90,
       ref={wrap}
       className="waveform"
       style={{ height }}
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
+        // pointer events: the same drag-to-loop works with a mouse, a pen or a finger
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         drag.current = { x0: e.clientX, t0: tAt(e.clientX) };
       }}
-      onMouseMove={(e) => {
+      onPointerMove={(e) => {
         if (drag.current && Math.abs(e.clientX - drag.current.x0) > 4) {
           const t1 = tAt(e.clientX);
           setSel([Math.min(drag.current.t0, t1), Math.max(drag.current.t0, t1)]);
         }
       }}
-      onMouseUp={(e) => {
+      onPointerCancel={() => (drag.current = null)}
+      onPointerUp={(e) => {
         if (!drag.current) return;
         if (Math.abs(e.clientX - drag.current.x0) > 4) {
           const t1 = tAt(e.clientX);
@@ -111,7 +114,6 @@ export default function Waveform({ id, peaksPath, duration, player, height = 90,
         } else player.seek(tAt(e.clientX));
         drag.current = null;
       }}
-      onMouseLeave={() => (drag.current = null)}
     >
       <canvas ref={canvas} style={{ height }} />
       {sel && (

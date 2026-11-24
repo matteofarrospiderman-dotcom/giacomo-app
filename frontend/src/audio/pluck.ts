@@ -16,7 +16,7 @@ function render(midi: number, seconds: number, bright: number, palmMute: boolean
   const period = sr / freq;
   const len = Math.max(2, Math.floor(period));
   const frac = period - len;
-  const line = new Float32Array(len + 2);
+  const line = new Float32Array(len);
   let prevNoise = 0;
   for (let i = 0; i < line.length; i++) {
     const w = Math.random() * 2 - 1;
@@ -28,7 +28,7 @@ function render(midi: number, seconds: number, bright: number, palmMute: boolean
   let last = 0;
   for (let i = 0; i < n; i++) {
     const a = line[idx];
-    const b = line[(idx + 1) % line.length];
+    const b = line[(idx + 1) % len];
     const s = a * (1 - frac) + b * frac;
     const y = decay * 0.5 * (s + last);
     last = s;

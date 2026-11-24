@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { playPitches } from "../audio/pluck";
 import { ENGINE_LABELS, FLAG_LABELS, TECHNIQUES, fmtTime, midiName, pct } from "../lib/format";
 import type { Note, Technique, Track } from "../lib/types";
@@ -9,10 +9,13 @@ interface Props {
   edit: (body: Record<string, unknown>, refinger?: boolean) => Promise<void>;
   remove: () => Promise<void>;
   busy: boolean;
+  playFrom: (t: number) => void;
 }
 
-export default function NoteInspector({ track, note, edit, remove, busy }: Props) {
+export default function NoteInspector({ track, note, edit, remove, busy, playFrom }: Props) {
   const [bend, setBend] = useState(2);
+  const [fretText, setFretText] = useState("");
+  useEffect(() => setFretText(note?.fret != null ? String(note.fret) : ""), [note?.id, note?.fret]);
   if (!note) {
     return (
       <div className="card">
@@ -52,6 +55,7 @@ export default function NoteInspector({ track, note, edit, remove, busy }: Props
       </div>
       <div className="row">
         <button className="sm" onClick={() => playPitches([note.pitch], { palmMute: has("palm_mute") })}>▶ Hear note</button>
+        <button className="sm primary" onClick={() => playFrom(note.start)}>▶ Play from here</button>
         <button className="sm" onClick={() => {
           const chord = track.notes.filter((n) => n.group === note.group && n.group !== undefined).map((n) => n.pitch);
           playPitches(chord.length ? chord : [note.pitch]);
@@ -66,8 +70,15 @@ export default function NoteInspector({ track, note, edit, remove, busy }: Props
           </select>
         </label>
         <label className="field">Fret
-          <input className="fret-input" type="number" min={0} max={track.max_fret} value={note.fret ?? ""} disabled={busy || !note.string}
-            onChange={(e) => e.target.value !== "" && edit({ string: note.string, fret: Number(e.target.value) })} />
+          <input className="fret-input" type="number" inputMode="numeric" min={0} max={track.max_fret} value={fretText} disabled={!note.string}
+            onChange={(e) => setFretText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            onBlur={() => {
+              // commit once, when typing is finished (Enter or leaving the field)
+              const f = Number(fretText);
+              if (fretText !== "" && f !== note.fret && f >= 0 && f <= track.max_fret) void edit({ string: note.string, fret: f });
+              else setFretText(note.fret != null ? String(note.fret) : "");
+            }} />
         </label>
         <label className="field">Pitch
           <div className="row" style={{ gap: 4 }}>

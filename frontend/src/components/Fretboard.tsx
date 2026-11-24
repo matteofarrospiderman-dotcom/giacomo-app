@@ -20,6 +20,8 @@ export default function Fretboard({ track, player, selected, onPick }: Props) {
   const nStr = track.tuning.strings;
   const capo = track.capo || 0;
   const W = 1100;
+  // stored frets are relative to the capo; the drawing is the physical neck
+  const phys = (fret: number) => fret + capo;
   const nut = 36;
   const scale = (W - nut - 10) / (1 - Math.pow(2, -FRETS / 12));
   const fx = (f: number) => nut + scale * (1 - Math.pow(2, -f / 12));
@@ -27,14 +29,14 @@ export default function Fretboard({ track, player, selected, onPick }: Props) {
   const H = (nStr - 1) * gap + 40;
   const sy = (s: number) => 20 + (s - 1) * gap;
   const mid = (f: number) => (f === 0 ? nut - 14 : (fx(f - 1) + fx(f)) / 2);
-  const openPitch = (s: number) => track.tuning.notes[nStr - s] + capo;
+  const openPitch = (s: number) => track.tuning.notes[nStr - s];
 
   const sounding = useMemo(() => track.notes, [track.notes]);
   const active = sounding.filter((n) => n.string && n.start <= t && n.end > t);
 
   return (
     <div className="fretboard">
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Fretboard">
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMinYMid meet" role="img" aria-label="Fretboard">
         <rect x={nut} y={10} width={W - nut - 10} height={H - 20} fill="#2a1d12" rx={3} />
         {INLAYS.map((f) => <circle key={f} cx={mid(f)} cy={H / 2} r={5} fill="#5a4630" />)}
         <circle cx={mid(12)} cy={H / 2 - gap} r={5} fill="#5a4630" />
@@ -56,27 +58,27 @@ export default function Fretboard({ track, player, selected, onPick }: Props) {
         {Array.from({ length: nStr }, (_, k) =>
           Array.from({ length: FRETS + 1 }, (_, f) => (
             <rect key={`${k}-${f}`} x={f === 0 ? nut - 26 : fx(f - 1)} y={sy(k + 1) - gap / 2} width={f === 0 ? 24 : fx(f) - fx(f - 1)} height={gap}
-              fill="transparent" style={{ cursor: selected ? "pointer" : "default" }}
-              onClick={() => selected && onPick(k + 1, f)}>
-              <title>{`string ${k + 1}, fret ${f}: ${midiName(openPitch(k + 1) + f)}`}</title>
+              fill={f < capo ? "rgba(0,0,0,0.35)" : "transparent"} style={{ cursor: selected && f >= capo ? "pointer" : "default" }}
+              onClick={() => selected && f >= capo && onPick(k + 1, f - capo)}>
+              <title>{f < capo ? "behind the capo" : `string ${k + 1}, fret ${f - capo}${capo ? " (capo)" : ""}: ${midiName(openPitch(k + 1) + f)}`}</title>
             </rect>
           )),
         )}
         {selected?.alternatives?.map((a) => (
           <g key={`alt-${a.string}-${a.fret}`} style={{ cursor: "pointer" }} onClick={() => onPick(a.string, a.fret)}>
-            <circle cx={mid(a.fret)} cy={sy(a.string)} r={8} fill="none" stroke="var(--cyan)" strokeDasharray="3 2" strokeWidth={1.5} />
+            <circle cx={mid(phys(a.fret))} cy={sy(a.string)} r={8} fill="none" stroke="var(--cyan)" strokeDasharray="3 2" strokeWidth={1.5} />
             <title>{`Alternative: string ${a.string} fret ${a.fret} (cost +${a.cost_delta.toFixed(2)})`}</title>
           </g>
         ))}
         {active.map((n) => (
           <g key={n.id} pointerEvents="none">
-            <circle cx={mid(n.fret!)} cy={sy(n.string!)} r={8.5} fill={n.level === "low" ? "var(--bad)" : n.level === "medium" ? "var(--warn)" : "var(--accent)"} />
-            <text x={mid(n.fret!)} y={sy(n.string!) + 3.5} fontSize={9.5} fontWeight={700} textAnchor="middle" fill="#1a1205">{n.fret}</text>
+            <circle cx={mid(phys(n.fret!))} cy={sy(n.string!)} r={8.5} fill={n.level === "low" ? "var(--bad)" : n.level === "medium" ? "var(--warn)" : "var(--accent)"} />
+            <text x={mid(phys(n.fret!))} y={sy(n.string!) + 3.5} fontSize={9.5} fontWeight={700} textAnchor="middle" fill="#1a1205">{n.fret}</text>
           </g>
         ))}
         {selected?.string && (
           <g pointerEvents="none">
-            <circle cx={mid(selected.fret!)} cy={sy(selected.string)} r={10} fill="none" stroke="var(--cyan)" strokeWidth={2.5} />
+            <circle cx={mid(phys(selected.fret!))} cy={sy(selected.string)} r={10} fill="none" stroke="var(--cyan)" strokeWidth={2.5} />
           </g>
         )}
       </svg>

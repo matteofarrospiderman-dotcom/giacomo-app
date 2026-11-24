@@ -99,12 +99,27 @@ def _finite(*xs: float) -> bool:
     return all(isinstance(x, (int, float)) and math.isfinite(x) for x in xs)
 
 
+def _lan_address() -> str | None:
+    """This machine's address on the local network (no packet is sent)."""
+    import socket  # noqa: PLC0415
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(("10.255.255.255", 1))
+            return sk.getsockname()[0]
+    except OSError:
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_dirs()
     n = jobs.recover()
     if n:
         log.info("re-queued %d interrupted project(s)", n)
+    ip = _lan_address()
+    if ip:
+        log.info("On your phone (same Wi-Fi, server started with --host 0.0.0.0): http://%s:8000", ip)
     yield
     jobs.shutdown()
 

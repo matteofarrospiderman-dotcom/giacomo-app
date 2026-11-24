@@ -38,10 +38,24 @@ type FrameListener = (t: number) => void;
 
 let sharedCtx: AudioContext | null = null;
 export function audioContext(): AudioContext {
-  if (!sharedCtx) sharedCtx = new AudioContext({ latencyHint: "interactive" });
-  if (sharedCtx.state === "suspended") void sharedCtx.resume();
+  if (!sharedCtx) {
+    // iOS: play through the ring/silent switch like a music app
+    try {
+      const nav = navigator as Navigator & { audioSession?: { type: string } };
+      if (nav.audioSession) nav.audioSession.type = "playback";
+    } catch {
+      /* not supported */
+    }
+    sharedCtx = new AudioContext({ latencyHint: "interactive" });
+  }
+  // "interrupted" is iOS after a phone call or backgrounding
+  if (sharedCtx.state !== "running") void sharedCtx.resume().catch(() => undefined);
   return sharedCtx;
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && sharedCtx && sharedCtx.state !== "running") void sharedCtx.resume().catch(() => undefined);
+});
 
 export class Player {
   private sources: Source[] = [];
@@ -66,12 +80,33 @@ export class Player {
         if (s === specs[0]) this.set({ duration: el.duration });
       });
       el.addEventListener("ended", () => {
-        if (s === specs[0]) this.pause();
+        if (s !== specs[0]) return;
+        const { loop, loopOn } = this.state;
+        if (loop && loopOn) {
+          // a loop that runs to the very end of the song wraps instead of stopping
+          this.seek(loop[0]);
+          void this.play();
+        } else this.pause();
       });
       return { ...s, el, node: null, gain: null, volume: defaults[s.id]?.volume ?? 1, muted: defaults[s.id]?.muted ?? false, solo: false };
     });
     this.emitSources();
     this.startClock();
+    this.setupMediaSession(specs[0]?.label ?? "TabForge");
+  }
+
+  /** Lock-screen / headphone / Bluetooth pedal controls. */
+  private setupMediaSession(title: string) {
+    try {
+      if (!("mediaSession" in navigator)) return;
+      navigator.mediaSession.metadata = new MediaMetadata({ title, artist: "TabForge" });
+      navigator.mediaSession.setActionHandler("play", () => void this.play());
+      navigator.mediaSession.setActionHandler("pause", () => this.pause());
+      navigator.mediaSession.setActionHandler("seekbackward", () => this.seek(this.time - 5));
+      navigator.mediaSession.setActionHandler("seekforward", () => this.seek(this.time + 5));
+    } catch {
+      /* optional */
+    }
   }
 
   private ensureGraph() {
@@ -104,22 +139,53 @@ export class Player {
     return this.master?.currentTime ?? 0;
   }
 
+  private playGen = 0;
+  private wake: { release: () => Promise<void> } | null = null;
+  private lastResync = 0;
+
   async play() {
     if (!this.master) return;
+    const gen = ++this.playGen;
     this.ensureGraph();
     const t = this.master.currentTime;
     for (const s of this.sources) {
       s.el.playbackRate = this.state.rate;
       s.el.currentTime = t;
     }
-    await Promise.allSettled(this.sources.map((s) => s.el.play()));
+    const results = await Promise.allSettled(this.sources.map((s) => s.el.play()));
+    if (gen !== this.playGen) return; // paused (or played again) while play() was pending
+    if (results[0].status === "rejected") {
+      // e.g. iOS NotAllowedError: do not claim to be playing when there is no sound
+      for (const s of this.sources) s.el.pause();
+      this.set({ playing: false });
+      return;
+    }
     this.lastBeatIdx = this.beatIndex(t);
     this.set({ playing: true });
+    this.startClock();
+    void this.keepAwake(true);
   }
 
   pause() {
+    this.playGen++;
     for (const s of this.sources) s.el.pause();
     this.set({ playing: false });
+    void this.keepAwake(false);
+    this.frameListeners.forEach((f) => f(this.time));
+  }
+
+  /** Keep the screen on while practising (tolerates browsers that refuse). */
+  private async keepAwake(on: boolean) {
+    try {
+      const nav = navigator as Navigator & { wakeLock?: { request: (t: string) => Promise<{ release: () => Promise<void> }> } };
+      if (on && !this.wake && nav.wakeLock) this.wake = await nav.wakeLock.request("screen");
+      if (!on && this.wake) {
+        await this.wake.release();
+        this.wake = null;
+      }
+    } catch {
+      this.wake = null;
+    }
   }
 
   toggle() {
@@ -204,6 +270,7 @@ export class Player {
     o.stop(ctx.currentTime + 0.06);
   }
 
+  /** Animation-frame clock; runs only while playing (no battery drain when paused). */
   private startClock = () => {
     cancelAnimationFrame(this.raf);
     const tick = () => {
@@ -211,9 +278,17 @@ export class Player {
       if (m) {
         const t = m.currentTime;
         if (this.state.playing) {
-          for (let i = 1; i < this.sources.length; i++) {
-            const el = this.sources[i].el;
-            if (Math.abs(el.currentTime - t) > 0.05) el.currentTime = t;
+          const now = performance.now();
+          if (now - this.lastResync > 500) {
+            // re-sync stems that drifted; skip elements still seeking or buffering, otherwise
+            // every correction stalls them again and they never catch up
+            for (let i = 1; i < this.sources.length; i++) {
+              const el = this.sources[i].el;
+              if (!el.seeking && el.readyState >= 3 && Math.abs(el.currentTime - t) > 0.1) {
+                el.currentTime = t;
+                this.lastResync = now;
+              }
+            }
           }
           const { loop, loopOn } = this.state;
           if (loop && loopOn && t >= loop[1]) this.seek(loop[0]);
@@ -225,7 +300,7 @@ export class Player {
         }
         this.frameListeners.forEach((f) => f(t));
       }
-      this.raf = requestAnimationFrame(tick);
+      if (this.state.playing) this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
   };

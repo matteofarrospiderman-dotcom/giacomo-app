@@ -183,6 +183,8 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tab-svg .str { stroke: var(--string); stroke-width: 1; }
 .tab-svg .bar { stroke: #7d879e; stroke-width: 1.2; }
 .tab-svg .mnum { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+.tab-svg .mnum-hit { fill: transparent; cursor: pointer; }
+.tab-svg .mnum-hit:hover { fill: rgba(56, 189, 248, 0.12); }
 .tab-svg .chord { fill: var(--cyan); font-size: 11.5px; font-weight: 700; }
 .tab-svg .slabel { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
 .tab-svg .note { cursor: pointer; }
@@ -235,3 +237,42 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--panel-3); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; color: var(--text-2); }
+
+/* ------------------------------------------------------------------ touch & phones */
+button, a.btn, .chip, .tab-svg, .fretboard svg { touch-action: manipulation; }
+.waveform { touch-action: none; } /* drag-to-loop with a finger */
+.tab-scroll { max-height: calc(100dvh - 360px); }
+.sheet-close { display: none; }
+.show-narrow { display: none; }
+.toast { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+.topbar { padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+
+@media (pointer: coarse) {
+  button, .btn { min-height: 40px; }
+  button.sm, .btn.sm { min-height: 36px; padding: 6px 10px; }
+  .ms button { width: 38px; height: 36px; }
+  .chip { min-height: 34px; display: inline-flex; align-items: center; }
+  .play-btn { width: 48px; height: 48px; }
+}
+
+@media (max-width: 760px) {
+  input, select, textarea { font-size: 16px; } /* iOS zooms into smaller form fields */
+  .hide-narrow { display: none; }
+  .show-narrow { display: inline; }
+  .brand small { display: none; }
+  .topbar { gap: 10px; padding-top: 8px; padding-bottom: 8px; position: static; } /* let the transport own the top edge */
+  .page { padding: 12px max(12px, env(safe-area-inset-left, 0px)) 24px max(12px, env(safe-area-inset-right, 0px)); }
+  .transport { top: env(safe-area-inset-top, 0px); gap: 8px; padding: 6px 8px; position: sticky; }
+  .transport .time { min-width: 0; font-size: 14px; }
+  .ws-head h2 { font-size: 17px; }
+  .tab-scroll { max-height: calc(100dvh - 250px); }
+  /* the note inspector becomes a bottom sheet over the tab */
+  .inspector-wrap.open {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: 62dvh; overflow-y: auto;
+    background: var(--panel); border-top: 1px solid var(--border); border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.45); padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .inspector-wrap.open .card { border: none; background: transparent; }
+  .inspector-wrap.open .sheet-close { display: inline-flex; position: sticky; top: 8px; float: right; margin: 8px 8px 0 0; z-index: 1; }
+  .side { position: static; max-height: none; }
+}

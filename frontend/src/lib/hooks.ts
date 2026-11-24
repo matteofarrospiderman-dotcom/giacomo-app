@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Player, PlayerState } from "../audio/engine";
 
 export function usePlayerState(player: Player): PlayerState {
-  return useSyncExternalStore(
-    (cb) => player.subscribe(cb),
-    () => player.state,
-  );
+  const subscribe = useCallback((cb: () => void) => player.subscribe(cb), [player]);
+  return useSyncExternalStore(subscribe, () => player.state);
 }
 
 /** Re-render at most `fps` times per second with the current playback time. */

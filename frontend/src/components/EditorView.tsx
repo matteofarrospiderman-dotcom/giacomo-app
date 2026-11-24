@@ -30,14 +30,19 @@ export default function EditorView({ id, analysis, tracks, trackId, setTrackId, 
   const [compare, setCompare] = useState<string | null>(null);
   const [scrollTo, setScrollTo] = useState<string | null>(null);
   const [autoplay, setAutoplay] = useState(true);
-  const fretBuf = useRef<{ s: string; t: number }>({ s: "", t: 0 });
+  const fretBuf = useRef<{ s: string; timer: number }>({ s: "", timer: 0 });
+  const currentTrack = useRef<string | null>(trackId);
+  const loopAnchor = useRef<{ idx: number; at: number } | null>(null);
   const st = usePlayerState(player);
 
   useEffect(() => {
+    currentTrack.current = trackId;
     if (!trackId) return;
     setTrack(null);
     setSelId(null);
-    api.track(id, trackId).then(setTrack).catch((e) => notify(e.message, true));
+    api.track(id, trackId)
+      .then((t) => { if (currentTrack.current === t.id) setTrack(t); }) // ignore responses for a track we left
+      .catch((e) => notify(e.message, true));
   }, [id, trackId, notify]);
 
   const sel = useMemo(() => track?.notes.find((n) => n.id === selId) ?? null, [track, selId]);
@@ -47,8 +52,9 @@ export default function EditorView({ id, analysis, tracks, trackId, setTrackId, 
     setBusy(true);
     try {
       const t = await p;
-      setTrack(t);
       onTrackChanged(t);
+      if (currentTrack.current !== t.id) return; // the user switched tracks meanwhile
+      setTrack(t);
       if (msg) notify(msg);
     } catch (e) {
       notify((e as Error).message, true);
@@ -87,8 +93,12 @@ export default function EditorView({ id, analysis, tracks, trackId, setTrackId, 
   // keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // browser shortcuts (zoom, reload...) stay intact
+      const el = e.target as HTMLElement;
+      const textEntry = el.tagName === "TEXTAREA" || el.isContentEditable ||
+        (el.tagName === "INPUT" && !["checkbox", "radio", "range", "button"].includes((el as HTMLInputElement).type));
+      if (textEntry) return;
+      if (el.tagName === "SELECT" && e.key !== " ") return; // arrows belong to the select
       if (e.code === "Space") {
         e.preventDefault();
         player.toggle();
@@ -107,15 +117,19 @@ export default function EditorView({ id, analysis, tracks, trackId, setTrackId, 
         }
         return;
       }
-      if (!sel || busy) return;
+      if (!sel) return;
+      if (busy && !/^[0-9]$/.test(e.key)) return;
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         e.preventDefault();
         const nStr = track.tuning.strings;
         const capo = track.capo || 0;
+        // strings already used by notes struck at the same moment are skipped
+        const busyStrings = new Set(track.notes.filter((n) => n.id !== sel.id && n.string && Math.abs(n.start - sel.start) < 0.04).map((n) => n.string));
         let s = sel.string ?? 1;
         for (let k = 0; k < nStr; k++) {
           s += e.key === "ArrowUp" ? -1 : 1;
           if (s < 1 || s > nStr) break;
+          if (busyStrings.has(s)) continue;
           const f = sel.pitch - (track.tuning.notes[nStr - s] + capo);
           if (f >= 0 && f <= track.max_fret) {
             void edit({ string: s });
@@ -132,16 +146,44 @@ export default function EditorView({ id, analysis, tracks, trackId, setTrackId, 
       if (e.key === "+" || e.key === "=") return void edit({ pitch: sel.pitch + 1 }, true);
       if (e.key === "-") return void edit({ pitch: sel.pitch - 1 }, true);
       if (/^[0-9]$/.test(e.key) && sel.string) {
-        const now = performance.now();
-        const buf = now - fretBuf.current.t < 700 ? fretBuf.current.s + e.key : e.key;
-        fretBuf.current = { s: buf, t: now };
-        const f = Number(buf);
-        if (f <= track.max_fret) void edit({ string: sel.string, fret: f });
+        // collect digits for 600 ms so "1" then "2" means fret 12, then commit once
+        const fb = fretBuf.current;
+        window.clearTimeout(fb.timer);
+        fb.s = (fb.s + e.key).slice(-2);
+        const string = sel.string;
+        fb.timer = window.setTimeout(() => {
+          const f = Number(fb.s);
+          fb.s = "";
+          if (f <= track.max_fret) void edit({ string, fret: f });
+          else notify(`Fret ${f} is beyond this guitar's ${track.max_fret} frets`, true);
+        }, 600);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [player, track, sel, ordered, busy, edit, remove, select]);
+  }, [player, track, sel, ordered, busy, edit, remove, select, notify]);
+
+  const barOffset = useMemo(() => {
+    if (!track?.measures.length) return 0;
+    const first = track.measures[0].start;
+    return analysis.rhythm.downbeats.filter((d) => d < first - 0.05).length;
+  }, [track, analysis.rhythm.downbeats]);
+
+  const onBarTap = useCallback((idx: number) => {
+    if (!track) return;
+    const a = loopAnchor.current;
+    let from = idx;
+    let to = idx;
+    if (a && a.idx !== idx && Date.now() - a.at < 10000) {
+      from = Math.min(a.idx, idx);
+      to = Math.max(a.idx, idx);
+      loopAnchor.current = null;
+    } else loopAnchor.current = { idx, at: Date.now() };
+    const loop: [number, number] = [track.measures[from].start, track.measures[to].end];
+    player.setLoop(loop, true);
+    player.seek(loop[0]);
+    notify(from === to ? `Looping bar ${from + 1 + barOffset} – tap another bar number to extend` : `Looping bars ${from + 1 + barOffset}–${to + 1 + barOffset}`);
+  }, [track, player, notify, barOffset]);
 
   if (!tracks.length) return <div className="notice">No transcribed parts yet. Open the Analysis tab to transcribe a stem.</div>;
   const changes = compare && track ? track.alternative_fingerings?.[compare]?.changes ?? null : null;
@@ -183,11 +225,16 @@ export default function EditorView({ id, analysis, tracks, trackId, setTrackId, 
           )}
           <div className="editor">
             <div className="col" style={{ gap: 14, minWidth: 0 }}>
-              <TabView track={track} chords={analysis.chords} player={player} selectedId={selId} onSelect={select} compare={changes} follow={follow} scrollTo={scrollTo} />
+              <TabView track={track} chords={analysis.chords} player={player} selectedId={selId} onSelect={select} compare={changes} follow={follow} scrollTo={scrollTo}
+                barOffset={barOffset} onBarTap={onBarTap} />
               <Fretboard track={track} player={player} selected={sel} onPick={(s, f) => edit({ string: s, fret: f }, true)} />
             </div>
             <div className="side">
-              <NoteInspector track={track} note={sel} edit={edit} remove={remove} busy={busy} />
+              <div className={`inspector-wrap ${sel ? "open" : ""}`}>
+                {sel && <button className="sheet-close ghost sm" onClick={() => setSelId(null)} aria-label="Close note details">✕</button>}
+                <NoteInspector track={track} note={sel} edit={edit} remove={remove} busy={busy}
+                  playFrom={(t) => { player.seek(Math.max(0, t - 0.6)); void player.play(); }} />
+              </div>
               <ReviewPanel track={track} onJump={jump} />
               <TrackPanel id={id} track={track} apply={applyTrack} compare={compare} setCompare={setCompare} busy={busy} />
             </div>

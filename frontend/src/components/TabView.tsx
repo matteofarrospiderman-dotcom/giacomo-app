@@ -49,6 +49,16 @@ function layout(track: Track, width: number): Layout {
   return { rows, height: (rows.at(-1)?.y ?? 0) + h + 10, meas };
 }
 
+/** Bend size in guitarist's terms: 1 semitone = "½", 2 = "full", 3 = "1½". */
+function bendLabel(semitones: number | undefined): string {
+  const st = Number(semitones ?? 1);
+  if (st === 2) return "full";
+  const steps = st / 2;
+  const whole = Math.floor(steps);
+  const half = steps - whole >= 0.5 ? "½" : "";
+  return `${whole || ""}${half}` || "¼";
+}
+
 function techLabel(n: Note): { above: string[]; prefix: string; suffix: string } {
   const above: string[] = [];
   let prefix = "";
@@ -59,8 +69,9 @@ function techLabel(n: Note): { above: string[]; prefix: string; suffix: string }
       case "pull_off": prefix = "p"; break;
       case "slide": suffix += t.direction === "down" ? "\\" : "/"; break;
       case "slide_in": prefix = t.direction === "from_above" ? "\\" : "/"; break;
-      case "bend": above.push(`↑${(t.semitones ?? 1) === 2 ? "full" : (t.semitones ?? 1) === 1 ? "½" : `${(t.semitones ?? 1) / 2}`}`); break;
-      case "bend_release": above.push(`↑↓${(t.semitones ?? 1) === 2 ? "full" : "½"}`); break;
+      case "bend": above.push(`↑${bendLabel(t.semitones)}`); break;
+      case "bend_release": above.push(`↑↓${bendLabel(t.semitones)}`); break;
+      case "harmonic": prefix = "<"; suffix += ">"; break;
       case "prebend_release": above.push("pb↓"); break;
       case "vibrato": above.push("~~"); break;
       case "palm_mute": above.push("PM"); break;
@@ -80,9 +91,12 @@ interface Props {
   compare: Record<string, [number, number]> | null;
   follow: boolean;
   scrollTo?: string | null;
+  /** song bar number of the track's first measure minus one (tab and transport agree) */
+  barOffset?: number;
+  onBarTap?: (measureIdx: number) => void;
 }
 
-function TabViewInner({ track, chords, player, selectedId, onSelect, compare, follow, scrollTo }: Props) {
+function TabViewInner({ track, chords, player, selectedId, onSelect, compare, follow, scrollTo, barOffset = 0, onBarTap }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   const head = useRef<HTMLDivElement>(null);
@@ -143,7 +157,7 @@ function TabViewInner({ track, chords, player, selectedId, onSelect, compare, fo
     });
     let lastOn = new Set<string>();
     let lastRow = -1;
-    return player.onFrame((t) => {
+    const unsubscribe = player.onFrame((t) => {
       const p = timeToPos(t);
       if (head.current) {
         if (p) {
@@ -173,6 +187,11 @@ function TabViewInner({ track, chords, player, selectedId, onSelect, compare, fo
       for (const id of on) if (!lastOn.has(id)) els.get(id)?.forEach((e) => e.classList.add("on"));
       lastOn = on;
     });
+    return () => {
+      unsubscribe();
+      // never leave a note stuck highlighted when the tab re-renders mid-playback
+      for (const id of lastOn) els.get(id)?.forEach((e) => e.classList.remove("on"));
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player, L, sorted, follow, nStr]);
 
@@ -182,9 +201,10 @@ function TabViewInner({ track, chords, player, selectedId, onSelect, compare, fo
     if (!scrollTo || !wrap.current) return;
     const el = svg.current?.querySelector(`[data-id="${scrollTo}"]`) as SVGGElement | null;
     if (!el) return;
-    const box = el.getBBox();
     const sc = wrap.current;
-    if (box.y < sc.scrollTop + 20 || box.y > sc.scrollTop + sc.clientHeight - 40) sc.scrollTo({ top: Math.max(0, box.y - 120), behavior: "smooth" });
+    // client rects include the row's translate(); getBBox() would not
+    const y = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
+    if (y < sc.scrollTop + 20 || y > sc.scrollTop + sc.clientHeight - 40) sc.scrollTo({ top: Math.max(0, y - 120), behavior: "smooth" });
   }, [scrollTo, L]);
 
   const svgPoint = (e: React.MouseEvent) => {
@@ -194,15 +214,17 @@ function TabViewInner({ track, chords, player, selectedId, onSelect, compare, fo
 
   const chordMarks = useMemo(() => {
     const out: { x: number; y: number; name: string; key: string }[] = [];
+    const ms0 = track.measures[0];
     for (const c of chords) {
       if (c.root == null) continue;
+      if (ms0 && c.end <= ms0.start) continue; // intro chords before this part's first bar
       const ms = track.measures;
-      const mi = ms.findIndex((m) => m.end > c.start);
+      const mi = ms.findIndex((m) => m.end > Math.max(c.start, ms0 ? ms0.start : c.start));
       if (mi < 0) continue;
       const m = ms[mi];
       const geo = L.meas.get(mi);
       if (!geo) continue;
-      const frac = Math.max(0, (c.start - m.start) / (m.end - m.start));
+      const frac = Math.max(0, (Math.max(c.start, m.start) - m.start) / (m.end - m.start));
       out.push({ x: geo.x + PAD + frac * (geo.w - 2 * PAD), y: L.rows[geo.row].y + 12, name: c.name, key: `${c.start}` });
     }
     // avoid overlapping labels
@@ -211,6 +233,7 @@ function TabViewInner({ track, chords, player, selectedId, onSelect, compare, fo
     for (const c of out) {
       const prev = kept.at(-1);
       if (!prev || prev.y !== c.y || c.x - prev.x > 34) kept.push(c);
+      else kept[kept.length - 1] = c; // the later chord is the one sounding from here on
     }
     return kept;
   }, [chords, track.measures, L]);
@@ -253,7 +276,14 @@ function TabViewInner({ track, chords, player, selectedId, onSelect, compare, fo
             {r.measures.map((m) => (
               <g key={m.idx}>
                 <line className="bar" x1={m.x} x2={m.x} y1={TOP} y2={TOP + (nStr - 1) * STR_GAP} />
-                <text className="mnum" x={m.x + 2} y={TOP - 22}>{m.idx + 1}</text>
+                <text className="mnum" x={m.x + 2} y={TOP - 22}>{m.idx + 1 + barOffset}</text>
+                {onBarTap && (
+                  <rect className="mnum-hit" x={m.x} y={TOP - 36} width={Math.min(44, m.w)} height={22}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); onBarTap(m.idx); }}>
+                    <title>Loop this bar (tap another bar number to extend)</title>
+                  </rect>
+                )}
                 {loopSel && (() => {
                   const meas = track.measures[m.idx];
                   const a = Math.max(loopSel[0], meas.start);
